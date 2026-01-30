@@ -6,7 +6,7 @@
 
 | Name                                          | Year     | Major            |
 | --------------------------------------------- | -------- | ---------------- |
-| Dmytro Avdiienko (Авдєєнко Дмитро Максимович) | 3rd year | Computer Science |
+| Dmytro Avdieienko (Авдєєнко Дмитро Максимович) | 3rd year | Computer Science |
 | Andrii Shalaiev (Шалаєв Андрій Юрійович)      | 3rd year | Computer Science |
 | Andrii Valenia (Валеня Андрій Іванович)       | 3rd year | Computer Science |
 
