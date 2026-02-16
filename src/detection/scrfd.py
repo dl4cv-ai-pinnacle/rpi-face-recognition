@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 
 import cv2
-import MNN
 import numpy as np
+import onnxruntime as ort
 
 from src.config import DetectionConfig
 from src.detection.base import Detection
@@ -17,21 +17,25 @@ _NUM_ANCHORS = 2
 
 
 class SCRFDDetector:
-    """SCRFD-500M face detector using MNN inference."""
+    """SCRFD-500M face detector using ONNX Runtime inference."""
 
     def __init__(self, config: DetectionConfig) -> None:
         self.config = config
         self.input_h, self.input_w = config.input_size
 
-        self._interpreter = MNN.Interpreter(config.model_path)
-        self._session = self._interpreter.createSession()
-        self._input_tensor = self._interpreter.getSessionInput(self._session)
+        self._session = ort.InferenceSession(
+            config.model_path,
+            providers=["CPUExecutionProvider"],
+        )
+        self._input_name = self._session.get_inputs()[0].name
+        self._output_names = [o.name for o in self._session.get_outputs()]
 
         logger.info(
-            "SCRFD loaded: %s (input %dx%d)",
+            "SCRFD loaded: %s (input %dx%d, outputs: %s)",
             config.model_path,
             self.input_w,
             self.input_h,
+            self._output_names,
         )
 
     def detect(self, image: np.ndarray) -> list[Detection]:
@@ -44,8 +48,8 @@ class SCRFDDetector:
             List of Detection objects with bbox, score, and 5 landmarks.
         """
         img, scale, pad_h, pad_w = self._preprocess(image)
-        self._run_session(img)
-        raw_dets = self._decode_outputs()
+        outputs = self._run_session(img)
+        raw_dets = self._decode_outputs(outputs)
         detections = self._postprocess(raw_dets, scale, pad_h, pad_w, image.shape)
         return detections
 
@@ -55,7 +59,7 @@ class SCRFDDetector:
         """Letterbox resize and normalize.
 
         Returns:
-            (preprocessed CHW float32 array, scale factor, pad_h, pad_w)
+            (preprocessed NCHW float32 array, scale factor, pad_h, pad_w)
         """
         h, w = image.shape[:2]
         scale = min(self.input_w / w, self.input_h / h)
@@ -76,23 +80,20 @@ class SCRFDDetector:
         # Normalize: (pixel - 127.5) / 128.0
         img = (padded.astype(np.float32) - 127.5) / 128.0
 
-        # HWC to CHW
-        img = img.transpose(2, 0, 1)
+        # HWC to NCHW
+        img = img.transpose(2, 0, 1)[np.newaxis, ...]
 
         return img, scale, pad_h, pad_w
 
-    def _run_session(self, img: np.ndarray) -> None:
-        """Feed input tensor and run MNN session."""
-        tmp_input = MNN.Tensor(
-            (1, 3, self.input_h, self.input_w),
-            MNN.Halide_Type_Float,
-            img.flatten().tolist(),
-            MNN.Tensor_DimensionType_Caffe,
+    def _run_session(self, img: np.ndarray) -> dict[str, np.ndarray]:
+        """Run ONNX Runtime inference."""
+        results = self._session.run(
+            self._output_names,
+            {self._input_name: img.astype(np.float32)},
         )
-        self._input_tensor.copyFrom(tmp_input)
-        self._interpreter.runSession(self._session)
+        return dict(zip(self._output_names, results))
 
-    def _decode_outputs(self) -> list[np.ndarray]:
+    def _decode_outputs(self, outputs: dict[str, np.ndarray]) -> list[np.ndarray]:
         """Decode raw FPN outputs into [x1, y1, x2, y2, score, lm0..lm9].
 
         Returns:
@@ -109,19 +110,22 @@ class SCRFDDetector:
             bbox_name = f"bbox_{stride}"
             kps_name = f"kps_{stride}"
 
-            cls_tensor = self._interpreter.getSessionOutput(
-                self._session, cls_name
-            )
-            bbox_tensor = self._interpreter.getSessionOutput(
-                self._session, bbox_name
-            )
-            kps_tensor = self._interpreter.getSessionOutput(
-                self._session, kps_name
-            )
+            # Fallback: some models use indexed names
+            if cls_name not in outputs:
+                # Try positional: outputs ordered as
+                # [score_8, bbox_8, kps_8, score_16, bbox_16, kps_16, ...]
+                keys = list(outputs.keys())
+                base = idx * 3
+                if base + 2 < len(keys):
+                    cls_name = keys[base]
+                    bbox_name = keys[base + 1]
+                    kps_name = keys[base + 2]
+                else:
+                    continue
 
-            cls_data = np.array(cls_tensor.getData()).reshape(-1, 1)
-            bbox_data = np.array(bbox_tensor.getData()).reshape(-1, 4)
-            kps_data = np.array(kps_tensor.getData()).reshape(-1, 10)
+            cls_data = outputs[cls_name].reshape(-1, 1)
+            bbox_data = outputs[bbox_name].reshape(-1, 4)
+            kps_data = outputs[kps_name].reshape(-1, 10)
 
             feat_h = self.input_h // stride
             feat_w = self.input_w // stride

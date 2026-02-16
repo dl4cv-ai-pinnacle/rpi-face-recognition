@@ -4,7 +4,7 @@ capture:
   format: "RGB888"
 
 detection:
-  model_path: "models/scrfd_500m.mnn"
+  model_path: "models/det_500m.onnx"
   confidence_threshold: 0.5
   nms_threshold: 0.4
   input_size: [640, 640]
@@ -13,8 +13,8 @@ alignment:
   output_size: 112
 
 embedding:
-  model_path: "models/mobilefacenet.mnn"
-  embedding_dim: 128
+  model_path: "models/w600k_mbf.onnx"
+  embedding_dim: 512
   input_size: 112
 
 matching:

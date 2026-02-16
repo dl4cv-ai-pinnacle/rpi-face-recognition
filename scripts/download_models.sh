@@ -1,47 +1,41 @@
 #!/usr/bin/env bash
 #
-# Download pre-converted MNN model files for the face recognition pipeline.
+# Download ONNX model files for the face recognition pipeline.
+# Models come from InsightFace buffalo_sc model pack.
+#
 # Usage: bash scripts/download_models.sh
 #
 set -euo pipefail
 
-MODELS_DIR="$(cd "$(dirname "$0")/.." && pwd)/models"
-mkdir -p "$MODELS_DIR"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+MODELS_DIR="$PROJECT_DIR/models"
+TMP_DIR="/tmp/insightface_models"
 
-# TODO: Replace these URLs with actual hosted model locations.
-# Models need to be converted from ONNX to MNN format using:
-#   MNNConvert -f ONNX --modelFile model.onnx --MNNModel model.mnn --bizCode biz
-#
-# Sources:
-#   SCRFD-500M ONNX:     https://github.com/deepinsight/insightface/tree/master/detection/scrfd
-#   MobileFaceNet ONNX:  https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch
+mkdir -p "$MODELS_DIR" "$TMP_DIR"
 
-SCRFD_URL="${SCRFD_URL:-}"
-MOBILEFACENET_URL="${MOBILEFACENET_URL:-}"
+BUFFALO_URL="https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_sc.zip"
+BUFFALO_ZIP="$TMP_DIR/buffalo_sc.zip"
 
-download_if_missing() {
-    local url="$1"
-    local dest="$2"
-    local name
-    name="$(basename "$dest")"
+# Download buffalo_sc pack if needed
+if [ ! -f "$MODELS_DIR/det_500m.onnx" ] || [ ! -f "$MODELS_DIR/w600k_mbf.onnx" ]; then
+    echo "[DOWNLOAD] Fetching buffalo_sc model pack..."
+    wget -q --show-progress -O "$BUFFALO_ZIP" "$BUFFALO_URL"
 
-    if [ -f "$dest" ]; then
-        echo "[OK] $name already exists, skipping"
-        return
-    fi
+    echo "[EXTRACT] Unpacking models..."
+    unzip -o "$BUFFALO_ZIP" -d "$TMP_DIR/buffalo_sc"
 
-    if [ -z "$url" ]; then
-        echo "[SKIP] $name — no URL set. Convert from ONNX manually:"
-        echo "       MNNConvert -f ONNX --modelFile <onnx_file> --MNNModel $dest --bizCode biz"
-        return
-    fi
+    # Copy the models we need
+    find "$TMP_DIR/buffalo_sc" -name "det_500m.onnx" -exec cp {} "$MODELS_DIR/det_500m.onnx" \;
+    find "$TMP_DIR/buffalo_sc" -name "w600k_mbf.onnx" -exec cp {} "$MODELS_DIR/w600k_mbf.onnx" \;
 
-    echo "[DOWNLOAD] $name from $url"
-    wget -q --show-progress -O "$dest" "$url"
-    echo "[OK] $name downloaded"
-}
+    echo "[OK] Models extracted to $MODELS_DIR"
+else
+    echo "[OK] Models already exist, skipping download"
+fi
 
-echo "=== Downloading models to $MODELS_DIR ==="
-download_if_missing "$SCRFD_URL" "$MODELS_DIR/scrfd_500m.mnn"
-download_if_missing "$MOBILEFACENET_URL" "$MODELS_DIR/mobilefacenet.mnn"
+# Verify
+echo ""
+echo "=== Model files ==="
+ls -lh "$MODELS_DIR"/*.onnx 2>/dev/null || echo "WARNING: No .onnx files found!"
 echo "=== Done ==="

@@ -1,5 +1,6 @@
 # Project-specific
 models/*.mnn
+models/*.onnx
 data/*.db
 data/*.index
 
