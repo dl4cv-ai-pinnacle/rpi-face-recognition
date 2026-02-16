@@ -1,0 +1,17 @@
+# Core dependencies
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+PyYAML>=6.0
+scikit-image>=0.21.0
+faiss-cpu>=1.7.4
+
+# Picamera2 -- installed via apt on RPi OS, not pip:
+#   sudo apt install python3-picamera2
+
+# MNN (PyMNN) -- must be built from source on RPi 5 (no aarch64 wheel):
+#   sudo apt install cmake build-essential
+#   git clone https://github.com/alibaba/MNN.git && cd MNN
+#   mkdir build && cd build
+#   cmake .. -DCMAKE_BUILD_TYPE=Release -DMNN_ARM82=ON -DMNN_BUILD_CONVERTER=ON -DMNN_BUILD_PYTHON=ON
+#   make -j4
+#   cd ../pymnn/pip_package && python3 setup.py install
