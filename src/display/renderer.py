@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 
 import cv2
@@ -9,6 +10,8 @@ from src.config import DisplayConfig
 from src.detection.base import Detection
 from src.matching.database import MatchResult
 
+logger = logging.getLogger(__name__)
+
 
 class Renderer:
     """Draw detection results and FPS on frames using OpenCV."""
@@ -17,6 +20,19 @@ class Renderer:
         self.config = config
         self._prev_time = time.monotonic()
         self._fps = 0.0
+        self._display_available = True
+
+        # Test if GUI backend is available
+        if config.show_window:
+            try:
+                cv2.namedWindow(config.window_name, cv2.WINDOW_NORMAL)
+            except cv2.error:
+                logger.warning(
+                    "OpenCV GUI not available (no GTK/Qt backend). "
+                    "Disabling display window. Install with: "
+                    "sudo apt install python3-opencv"
+                )
+                self._display_available = False
 
     def render(
         self,
@@ -71,5 +87,5 @@ class Renderer:
             2,
         )
 
-        if self.config.show_window:
+        if self.config.show_window and self._display_available:
             cv2.imshow(self.config.window_name, display)

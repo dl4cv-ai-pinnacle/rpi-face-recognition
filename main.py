@@ -58,7 +58,10 @@ def main() -> None:
         database.save()
         database.close()
         capture.release()
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
         logger.info("Shutdown complete")
 
 

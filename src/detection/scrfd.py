@@ -11,8 +11,9 @@ from src.detection.base import Detection
 
 logger = logging.getLogger(__name__)
 
-# SCRFD FPN strides and anchors-per-location
+# SCRFD FPN strides
 _STRIDES = [8, 16, 32]
+_FMC = 3  # feature map count (number of FPN levels)
 _NUM_ANCHORS = 2
 
 
@@ -30,12 +31,16 @@ class SCRFDDetector:
         self._input_name = self._session.get_inputs()[0].name
         self._output_names = [o.name for o in self._session.get_outputs()]
 
+        # Detect model variant: 6 outputs = no keypoints, 9 = with keypoints
+        self._use_kps = len(self._output_names) == 9
+
         logger.info(
-            "SCRFD loaded: %s (input %dx%d, outputs: %s)",
+            "SCRFD loaded: %s (input %dx%d, %d outputs, kps=%s)",
             config.model_path,
             self.input_w,
             self.input_h,
-            self._output_names,
+            len(self._output_names),
+            self._use_kps,
         )
 
     def detect(self, image: np.ndarray) -> list[Detection]:
@@ -56,11 +61,7 @@ class SCRFDDetector:
     def _preprocess(
         self, image: np.ndarray
     ) -> tuple[np.ndarray, float, int, int]:
-        """Letterbox resize and normalize.
-
-        Returns:
-            (preprocessed NCHW float32 array, scale factor, pad_h, pad_w)
-        """
+        """Letterbox resize and normalize."""
         h, w = image.shape[:2]
         scale = min(self.input_w / w, self.input_h / h)
         new_w = int(w * scale)
@@ -68,7 +69,6 @@ class SCRFDDetector:
 
         resized = cv2.resize(image, (new_w, new_h))
 
-        # Pad to input size
         pad_h = (self.input_h - new_h) // 2
         pad_w = (self.input_w - new_w) // 2
 
@@ -77,98 +77,112 @@ class SCRFDDetector:
         )
         padded[pad_h : pad_h + new_h, pad_w : pad_w + new_w] = resized
 
-        # Normalize: (pixel - 127.5) / 128.0
         img = (padded.astype(np.float32) - 127.5) / 128.0
-
-        # HWC to NCHW
         img = img.transpose(2, 0, 1)[np.newaxis, ...]
 
         return img, scale, pad_h, pad_w
 
-    def _run_session(self, img: np.ndarray) -> dict[str, np.ndarray]:
-        """Run ONNX Runtime inference."""
-        results = self._session.run(
+    def _run_session(self, img: np.ndarray) -> list[np.ndarray]:
+        """Run ONNX Runtime inference. Returns list of output arrays."""
+        return self._session.run(
             self._output_names,
             {self._input_name: img.astype(np.float32)},
         )
-        return dict(zip(self._output_names, results))
 
-    def _decode_outputs(self, outputs: dict[str, np.ndarray]) -> list[np.ndarray]:
+    def _decode_outputs(self, net_outs: list[np.ndarray]) -> list[np.ndarray]:
         """Decode raw FPN outputs into [x1, y1, x2, y2, score, lm0..lm9].
 
-        Returns:
-            List of arrays, one per stride. Each has shape (N, 15).
+        Output ordering (InsightFace convention):
+          6 outputs: [score_8, score_16, score_32, bbox_8, bbox_16, bbox_32]
+          9 outputs: [score_8, score_16, score_32, bbox_8, bbox_16, bbox_32, kps_8, kps_16, kps_32]
         """
         all_dets = []
 
         for idx, stride in enumerate(_STRIDES):
-            # Output tensor names follow SCRFD convention:
-            #   score: score_8, score_16, score_32
-            #   bbox:  bbox_8, bbox_16, bbox_32
-            #   kps:   kps_8, kps_16, kps_32
-            cls_name = f"score_{stride}"
-            bbox_name = f"bbox_{stride}"
-            kps_name = f"kps_{stride}"
+            scores = net_outs[idx].reshape(-1)
+            bbox_raw = net_outs[idx + _FMC].reshape(-1, 4)
 
-            # Fallback: some models use indexed names
-            if cls_name not in outputs:
-                # Try positional: outputs ordered as
-                # [score_8, bbox_8, kps_8, score_16, bbox_16, kps_16, ...]
-                keys = list(outputs.keys())
-                base = idx * 3
-                if base + 2 < len(keys):
-                    cls_name = keys[base]
-                    bbox_name = keys[base + 1]
-                    kps_name = keys[base + 2]
-                else:
-                    continue
+            # Pre-multiply by stride (official InsightFace convention)
+            bbox_preds = bbox_raw * stride
 
-            cls_data = outputs[cls_name].reshape(-1, 1)
-            bbox_data = outputs[bbox_name].reshape(-1, 4)
-            kps_data = outputs[kps_name].reshape(-1, 10)
+            if self._use_kps:
+                kps_raw = net_outs[idx + _FMC * 2].reshape(-1, 10)
+                kps_preds = kps_raw * stride
+            else:
+                kps_preds = None
 
             feat_h = self.input_h // stride
             feat_w = self.input_w // stride
 
-            # Generate anchor centers
-            anchors = []
-            for i in range(feat_h):
-                for j in range(feat_w):
-                    cx = (j + 0.5) * stride
-                    cy = (i + 0.5) * stride
-                    for _ in range(_NUM_ANCHORS):
-                        anchors.append([cx, cy])
-            anchors = np.array(anchors, dtype=np.float32)
+            # Generate anchor centers (no +0.5 offset, per official code)
+            anchor_centers = np.stack(
+                np.mgrid[:feat_h, :feat_w][::-1], axis=-1
+            ).astype(np.float32)
+            anchor_centers = (anchor_centers * stride).reshape(-1, 2)
+            if _NUM_ANCHORS > 1:
+                anchor_centers = np.stack(
+                    [anchor_centers] * _NUM_ANCHORS, axis=1
+                ).reshape(-1, 2)
 
             # Filter by confidence
-            scores = cls_data.flatten()
             mask = scores > self.config.confidence_threshold
             if not np.any(mask):
                 continue
 
-            scores = scores[mask]
-            bbox_data = bbox_data[mask]
-            kps_data = kps_data[mask]
-            anchors_sel = anchors[mask]
+            scores_sel = scores[mask]
+            bbox_sel = bbox_preds[mask]
+            anchors_sel = anchor_centers[mask]
 
-            # Decode bboxes: distance from anchor
-            x1 = anchors_sel[:, 0] - bbox_data[:, 0] * stride
-            y1 = anchors_sel[:, 1] - bbox_data[:, 1] * stride
-            x2 = anchors_sel[:, 0] + bbox_data[:, 2] * stride
-            y2 = anchors_sel[:, 1] + bbox_data[:, 3] * stride
+            # Decode bboxes: distance from anchor (already scaled by stride)
+            x1 = anchors_sel[:, 0] - bbox_sel[:, 0]
+            y1 = anchors_sel[:, 1] - bbox_sel[:, 1]
+            x2 = anchors_sel[:, 0] + bbox_sel[:, 2]
+            y2 = anchors_sel[:, 1] + bbox_sel[:, 3]
 
             # Decode landmarks
-            lms = np.zeros_like(kps_data)
-            for k in range(5):
-                lms[:, k * 2] = anchors_sel[:, 0] + kps_data[:, k * 2] * stride
-                lms[:, k * 2 + 1] = (
-                    anchors_sel[:, 1] + kps_data[:, k * 2 + 1] * stride
-                )
+            if kps_preds is not None:
+                kps_sel = kps_preds[mask]
+                lms = np.zeros_like(kps_sel)
+                for k in range(5):
+                    lms[:, k * 2] = anchors_sel[:, 0] + kps_sel[:, k * 2]
+                    lms[:, k * 2 + 1] = anchors_sel[:, 1] + kps_sel[:, k * 2 + 1]
+            else:
+                # No keypoints: estimate from bbox center
+                n = len(scores_sel)
+                lms = self._estimate_landmarks(x1, y1, x2, y2, n)
 
-            dets = np.column_stack([x1, y1, x2, y2, scores, lms])
+            dets = np.column_stack([x1, y1, x2, y2, scores_sel, lms])
             all_dets.append(dets)
 
         return all_dets
+
+    @staticmethod
+    def _estimate_landmarks(
+        x1: np.ndarray, y1: np.ndarray, x2: np.ndarray, y2: np.ndarray, n: int
+    ) -> np.ndarray:
+        """Estimate 5-point landmarks from bounding box when model has no kps output.
+
+        Uses standard face proportions relative to the bounding box.
+        """
+        w = x2 - x1
+        h = y2 - y1
+        lms = np.zeros((n, 10), dtype=np.float32)
+        # left eye
+        lms[:, 0] = x1 + w * 0.3
+        lms[:, 1] = y1 + h * 0.35
+        # right eye
+        lms[:, 2] = x1 + w * 0.7
+        lms[:, 3] = y1 + h * 0.35
+        # nose
+        lms[:, 4] = x1 + w * 0.5
+        lms[:, 5] = y1 + h * 0.55
+        # left mouth
+        lms[:, 6] = x1 + w * 0.35
+        lms[:, 7] = y1 + h * 0.75
+        # right mouth
+        lms[:, 8] = x1 + w * 0.65
+        lms[:, 9] = y1 + h * 0.75
+        return lms
 
     def _postprocess(
         self,
@@ -184,11 +198,9 @@ class SCRFDDetector:
 
         dets = np.concatenate(raw_dets, axis=0)
 
-        # NMS
         boxes = dets[:, :4]
         scores = dets[:, 4]
 
-        # Convert to xywh for cv2.dnn.NMSBoxes
         x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
         w = x2 - x1
         h = y2 - y1
@@ -206,7 +218,6 @@ class SCRFDDetector:
         indices = indices.flatten()
         dets = dets[indices]
 
-        # Map back to original image coordinates
         orig_h, orig_w = orig_shape[:2]
         results = []
         for det in dets:
@@ -214,17 +225,14 @@ class SCRFDDetector:
             score = float(det[4])
             lms = det[5:].reshape(5, 2).copy()
 
-            # Remove padding offset
             bbox[[0, 2]] -= pad_w
             bbox[[1, 3]] -= pad_h
             lms[:, 0] -= pad_w
             lms[:, 1] -= pad_h
 
-            # Remove scale
             bbox /= scale
             lms /= scale
 
-            # Clip to image bounds
             bbox[[0, 2]] = np.clip(bbox[[0, 2]], 0, orig_w)
             bbox[[1, 3]] = np.clip(bbox[[1, 3]], 0, orig_h)
 
