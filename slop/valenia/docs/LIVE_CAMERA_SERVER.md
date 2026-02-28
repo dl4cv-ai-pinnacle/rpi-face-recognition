@@ -27,6 +27,7 @@ python3 slop/valenia/scripts/live_camera_server.py \
   --match-threshold 0.228 \
   --embed-refresh-frames 5 \
   --embed-refresh-iou 0.85 \
+  --metrics-json data/metrics/live_camera_metrics.json \
   --ram-cap-mb 4096
 ```
 
@@ -37,6 +38,7 @@ The server binds to `0.0.0.0:8000` by default.
 - `/` returns a tiny HTML page with an `<img>` tag pointed at the stream.
 - `/` also includes a simple upload form for enrolling identities by name.
 - `/stream.mjpg` returns an MJPEG stream (`multipart/x-mixed-replace`).
+- `/metrics.json` returns the current rolling live metrics snapshot.
 
 ## Useful flags
 
@@ -53,6 +55,7 @@ python3 slop/valenia/scripts/live_camera_server.py \
 Other model and detector flags match the existing benchmark script defaults.
 Use `--disable-embed-refresh` to force the older behavior and recompute face
 embeddings on every fresh tracked frame.
+Use `--metrics-json ""` to disable writing the rolling metrics file.
 
 ## Notes
 
@@ -60,5 +63,6 @@ embeddings on every fresh tracked frame.
 - Frames are annotated with stable track IDs, smoothed boxes/landmarks, match labels, and per-frame timings.
 - By default, identity embeddings are refreshed only for new, stale, or moved tracks.
 - Uploaded photos are stored under `slop/valenia/data/gallery/<identity>/`.
+- Rolling live metrics are written to `slop/valenia/data/metrics/live_camera_metrics.json` by default.
 - The script exits early with a clear message if no camera is detected.
 - The default RAM cap is `4096 MiB`.

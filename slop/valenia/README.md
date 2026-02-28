@@ -86,6 +86,7 @@ python3 slop/valenia/scripts/live_camera_server.py --ram-cap-mb 4096
 
 Then open `http://<pi-ip>:8000/` from another device on the same network.
 The page includes a simple photo upload form for enrolling named identities.
+It also shows live metrics, mirrored at `http://<pi-ip>:8000/metrics.json`.
 Detailed notes: `slop/valenia/docs/LIVE_CAMERA_SERVER.md`
 
 ## Notes
