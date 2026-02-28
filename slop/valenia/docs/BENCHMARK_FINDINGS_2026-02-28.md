@@ -34,7 +34,7 @@ Command:
 python3 -u slop/valenia/scripts/evaluate_lfw.py \
   --view2-pairs data/lfw/pairs.txt \
   --ram-cap-mb 4096 \
-  --output-json docs/metrics/lfw_view2_fp32_2026-02-28.json
+  --output-json slop/valenia/docs/metrics/lfw_view2_fp32_2026-02-28.json
 ```
 
 Results:
@@ -54,23 +54,104 @@ JSON artifact:
 
 - `slop/valenia/docs/metrics/lfw_view2_fp32_2026-02-28.json`
 
-## Quantization Status
+## INT8 Quantized Embedder
 
-Attempted dynamic INT8 quantization for the ArcFace model is currently blocked on this machine.
+The recognition model can be quantized on this Pi with Python `3.13`, but the
+conversion must run in an isolated `uv` environment with newer PyPI wheels.
+The Debian-packaged `python3-onnx` + `python3-onnxruntime` combination still
+fails when importing `onnxruntime.quantization`.
 
-Observed failure:
+### Quantization Command
 
-- Importing `onnxruntime.quantization` fails on Debian's `python3-onnx` +
-  `python3-onnxruntime` combination with duplicate ONNX schema registration
-  errors and a final `NotImplementedError` around duplicate `LRN` operator names.
+```bash
+uv run --isolated --python 3.13 \
+  --with onnx==1.20.1 \
+  --with onnxruntime==1.24.2 \
+  python -c 'from pathlib import Path; import time; from onnxruntime.quantization import QuantType, quantize_dynamic; src=Path("slop/valenia/models/buffalo_sc/w600k_mbf.onnx"); dst=Path("slop/valenia/models/buffalo_sc/w600k_mbf.int8.onnx"); t0=time.perf_counter(); quantize_dynamic(model_input=str(src), model_output=str(dst), op_types_to_quantize=["MatMul","Gemm"], weight_type=QuantType.QInt8, per_channel=False); dt=(time.perf_counter()-t0)*1000; print(f"OUTPUT={dst}"); print(f"QUANTIZE_MS={dt:.2f}"); print(f"SRC_SIZE={src.stat().st_size}"); print(f"DST_SIZE={dst.stat().st_size}")'
+```
 
-Impact:
+Quantization result:
 
-- No valid INT8 delta is available yet on this Pi.
-- The benchmark and evaluation scripts now fail fast with a short actionable
-  message instead of a long stack trace when quantization is requested.
+- Output model: `slop/valenia/models/buffalo_sc/w600k_mbf.int8.onnx`
+- Quantization time: `331.57 ms`
+- Source size: `12.99 MiB`
+- Quantized size: `8.39 MiB`
+- Size reduction: `4.59 MiB` (`35.4%`)
 
-Recommended next step:
+### LFW View2 Evaluation (INT8)
 
-- Generate the quantized `.onnx` model in a separate compatible environment,
-  then evaluate it here by passing `--rec-model <quantized_model_path>`.
+Command:
+
+```bash
+python3 -u slop/valenia/scripts/evaluate_lfw.py \
+  --view2-pairs data/lfw/pairs.txt \
+  --rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
+  --ram-cap-mb 4096 \
+  --output-json slop/valenia/docs/metrics/lfw_view2_int8_2026-02-28.json
+```
+
+Results:
+
+- Train accuracy: `0.9491`
+- Test accuracy: `0.9370`
+- ROC-AUC: `0.9326`
+- EER: `0.1120`
+- TAR@FAR<=1e-2: `0.8800`
+- View2 10-fold accuracy: `0.9472` (std `0.0094`)
+- Avg detection latency: `21.65 ms/image`
+- Avg embedding latency: `28.01 ms/face`
+- Preprocess throughput: `19.57 images/s`
+- Peak RSS: `265.94 MiB`
+
+FP32 delta:
+
+- Train accuracy: unchanged
+- Test accuracy: unchanged
+- ROC-AUC: `+0.000058`
+- View2 10-fold accuracy: `-0.000333` (`-0.033` percentage points)
+- Avg detection latency: `+0.81 ms/image`
+- Avg embedding latency: `-0.63 ms/face`
+- Peak RSS: `-6.00 MiB`
+
+JSON artifact:
+
+- `slop/valenia/docs/metrics/lfw_view2_int8_2026-02-28.json`
+
+### Image Benchmark (INT8)
+
+Command:
+
+```bash
+python3 -u slop/valenia/scripts/benchmark_pipeline.py \
+  --mode image \
+  --image slop/valenia/data/lena.jpg \
+  --runs 50 \
+  --det-every 1 \
+  --rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
+  --ram-cap-mb 4096
+```
+
+Results:
+
+- Frames: `50`
+- Avg loop latency: `54.27 ms`
+- Avg FPS: `18.43`
+- Avg detection latency: `21.84 ms`
+- Avg embedding latency: `27.89 ms/frame`
+- Peak RSS: `228.25 MiB`
+
+FP32 delta:
+
+- Avg loop latency: `-16.12 ms`
+- Avg FPS: `+4.22` (`1.30x`)
+- Avg detection latency: `-1.60 ms`
+- Avg embedding latency: `-0.99 ms/frame`
+- Peak RSS: `-5.70 MiB`
+
+## Practical Takeaway
+
+- Python `3.13` is viable for quantization on this Pi.
+- The blocker is only the Debian ONNX package set used by system `python3`.
+- Runtime inference can stay on the current system stack.
+- Quantization should use `uv --isolated`, then the generated INT8 model can be
+  passed into the existing scripts with `--rec-model`.

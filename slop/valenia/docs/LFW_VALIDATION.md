@@ -84,3 +84,27 @@ From `docs/metrics/lfw_dev_view2_baseline.json`:
 - It validates both recognition quality and per-stage runtime before live camera deployment.
 - JSON outputs are meant for tracking improvements across model/runtime changes.
 - This is a strong baseline protocol but not a production security certification benchmark.
+
+## INT8 Comparison (2026-02-28)
+
+Dynamic INT8 quantization of the recognition model was validated on this Pi by
+creating `slop/valenia/models/buffalo_sc/w600k_mbf.int8.onnx` in an isolated
+`uv` environment with `onnx==1.20.1` and `onnxruntime==1.24.2`, then running
+the normal evaluation script with `--rec-model`.
+
+From `slop/valenia/docs/metrics/lfw_view2_int8_2026-02-28.json`:
+
+- Train accuracy: `0.9491`
+- Test accuracy: `0.9370`
+- Test ROC-AUC: `0.9326`
+- Test EER: `0.1120`
+- Test TAR@FAR<=1e-2: `0.8800`
+- View2 10-fold accuracy: `0.9472` (std `0.0094`)
+- Avg detection latency: `21.65 ms / image`
+- Avg embedding latency: `28.01 ms / face`
+- Preprocess throughput: `19.57 images/s`
+- Peak RSS: `265.94 MiB`
+
+Compared with the FP32 baseline, recognition quality is effectively unchanged,
+while embedding latency improves by `0.63 ms / face` and peak RSS drops by
+`6.00 MiB`.
