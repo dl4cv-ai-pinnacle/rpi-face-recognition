@@ -1,0 +1,44 @@
+{
+  "requested": {
+    "train_pairs": 2200,
+    "test_pairs": 1000,
+    "total_pairs": 3200,
+    "unique_images": 4992
+  },
+  "usable": {
+    "train_pairs": 2200,
+    "test_pairs": 1000,
+    "train_dropped": 0,
+    "test_dropped": 0,
+    "image_decode_success": 4992,
+    "face_embedding_success": 4992
+  },
+  "metrics": {
+    "best_threshold_train": 0.2280000001192093,
+    "train_accuracy": 0.9490908980369568,
+    "test_accuracy": 0.9369999766349792,
+    "test_auc": 0.932556,
+    "test_eer": 0.11199999999999999,
+    "test_eer_threshold": 0.08100000023841858,
+    "test_tar_far_1e-2": 0.88,
+    "test_tar_far_1e-2_threshold": 0.1850000023841858
+  },
+  "latency_ms": {
+    "detection_avg_per_image": 22.075115066107067,
+    "embedding_avg_per_successful_face": 29.13423522195776
+  },
+  "throughput": {
+    "preprocess_seconds": 262.86833685700003,
+    "images_per_second": 18.99049562106691,
+    "pairs_per_second": 12.173394628889044,
+    "scored_pairs": 3200
+  },
+  "config": {
+    "det_model": "/home/andrii/rpi-face-recognition/models/buffalo_sc/det_500m.onnx",
+    "rec_model": "/home/andrii/rpi-face-recognition/models/buffalo_sc/w600k_mbf.onnx",
+    "det_size": "320x320",
+    "det_thresh": 0.5,
+    "train_pairs_file": "/home/andrii/rpi-face-recognition/data/lfw/pairsDevTrain.txt",
+    "test_pairs_file": "/home/andrii/rpi-face-recognition/data/lfw/pairsDevTest.txt"
+  }
+}
