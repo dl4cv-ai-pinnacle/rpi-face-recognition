@@ -1,0 +1,70 @@
+{
+  "requested": {
+    "train_pairs": 2200,
+    "test_pairs": 1000,
+    "total_pairs": 9200,
+    "unique_images": 9056,
+    "view2_pairs": 6000
+  },
+  "usable": {
+    "train_pairs": 2200,
+    "test_pairs": 1000,
+    "train_dropped": 0,
+    "test_dropped": 0,
+    "view2_pairs": 6000,
+    "view2_dropped": 0,
+    "image_decode_success": 9056,
+    "face_embedding_success": 9056
+  },
+  "metrics": {
+    "best_threshold_train": 0.2280000001192093,
+    "train_accuracy": 0.9490908980369568,
+    "test_accuracy": 0.9369999766349792,
+    "test_auc": 0.932544,
+    "test_eer": 0.11199999999999999,
+    "test_eer_threshold": 0.08100000023841858,
+    "test_tar_far_1e-2": 0.88,
+    "test_tar_far_1e-2_threshold": 0.1850000023841858,
+    "view2_cv_accuracy": 0.9474999904632568,
+    "view2_cv_std": 0.009494141191423498,
+    "view2_cv_mean_threshold": 0.21579999923706056
+  },
+  "latency_ms": {
+    "detection_avg_per_image": 20.8394947021837,
+    "embedding_avg_per_successful_face": 28.63947028677129
+  },
+  "throughput": {
+    "preprocess_seconds": 472.8083282739999,
+    "images_per_second": 19.15363892395716,
+    "pairs_per_second": 19.458202087058954,
+    "scored_pairs": 9200
+  },
+  "memory_mb": {
+    "startup_current_rss": 148.59375,
+    "post_init_current_rss": 188.0,
+    "final_current_rss": 271.9375,
+    "final_peak_rss": 271.9375,
+    "model_init_delta_rss": 39.40625
+  },
+  "quantization": {
+    "rec_enabled": false,
+    "rec_quantized_model_path": "",
+    "rec_reused_existing": false,
+    "rec_quantize_ms": 0.0,
+    "rec_original_size_mb": 0.0,
+    "rec_quantized_size_mb": 0.0,
+    "rec_size_delta_mb": 0.0
+  },
+  "config": {
+    "det_model": "/home/andrii/rpi-face-recognition/slop/valenia/models/buffalo_sc/det_500m.onnx",
+    "rec_model": "/home/andrii/rpi-face-recognition/slop/valenia/models/buffalo_sc/w600k_mbf.onnx",
+    "det_size": "320x320",
+    "det_thresh": 0.5,
+    "train_pairs_file": "/home/andrii/rpi-face-recognition/slop/valenia/data/lfw/pairsDevTrain.txt",
+    "test_pairs_file": "/home/andrii/rpi-face-recognition/slop/valenia/data/lfw/pairsDevTest.txt",
+    "view2_pairs_file": "/home/andrii/rpi-face-recognition/slop/valenia/data/lfw/pairs.txt",
+    "view2_folds": 10,
+    "view2_fold_size": 600,
+    "ram_cap_mb": 4096.0
+  }
+}
