@@ -20,9 +20,10 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from arcface import ArcFaceEmbedder
-from pipeline import FacePipeline, FrameResult
+from pipeline import FacePipeline
 from runtime_utils import MemoryStats, UInt8Array, enforce_memory_cap
 from scrfd import SCRFDDetector
+from tracking import SimpleFaceTracker, Track
 
 HTML_PAGE = """<!doctype html>
 <html lang="en">
@@ -84,6 +85,13 @@ class StreamSnapshot:
     error: str | None
 
 
+@dataclass(frozen=True)
+class TrackingOverlay:
+    tracks: list[Track]
+    detect_ms: float
+    track_ms: float
+
+
 class CameraStreamer:
     """Capture frames in one background loop and keep only the latest JPEG."""
 
@@ -100,6 +108,11 @@ class CameraStreamer:
         self._frame_interval = 1.0 / args.fps if args.fps > 0 else 0.0
         self._frames_processed = 0
         self._memory: MemoryStats = enforce_memory_cap(args.ram_cap_mb, "live camera startup")
+        self._tracker = SimpleFaceTracker(
+            iou_threshold=args.track_iou_thresh,
+            max_missed=args.track_max_missed,
+            smoothing=args.track_smoothing,
+        )
 
     def start(self) -> None:
         from picamera2 import Picamera2
@@ -161,8 +174,14 @@ class CameraStreamer:
             try:
                 frame_rgb = np.asarray(camera.capture_array(), dtype=np.uint8)
                 frame_bgr = np.asarray(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), dtype=np.uint8)
-                result = self.pipeline.process_frame(frame_bgr, max_faces=self.args.max_faces)
-                annotate_in_place(frame_bgr, result)
+                det, detect_ms = self.pipeline.detect(frame_bgr)
+                track_t0 = time.perf_counter()
+                tracks = self._tracker.update(det.boxes, det.kps, max_tracks=self.args.max_faces)
+                track_ms = (time.perf_counter() - track_t0) * 1000.0
+                annotate_in_place(
+                    frame_bgr,
+                    TrackingOverlay(tracks=tracks, detect_ms=detect_ms, track_ms=track_ms),
+                )
                 ok, encoded = cv2.imencode(
                     ".jpg",
                     frame_bgr,
@@ -260,32 +279,43 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         return
 
 
-def annotate_in_place(frame_bgr: UInt8Array, result: FrameResult) -> None:
-    for idx, box in enumerate(result.boxes):
+def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
+    fresh_tracks = 0
+    for track in overlay.tracks:
+        box = track.box
         x1, y1, x2, y2, score = box
+        color = (0, 255, 0) if track.matched else (0, 191, 255)
+        if track.matched:
+            fresh_tracks += 1
         cv2.rectangle(
             frame_bgr,
             (int(x1), int(y1)),
             (int(x2), int(y2)),
-            color=(0, 255, 0),
+            color=color,
             thickness=2,
         )
+        label = f"id={track.track_id} {score:.2f}"
+        if not track.matched:
+            label = f"{label} hold"
         cv2.putText(
             frame_bgr,
-            f"{score:.2f}",
+            label,
             (int(x1), max(16, int(y1) - 6)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
-            (0, 255, 0),
+            color,
             1,
         )
-        if result.kps is None:
+        if track.kps is None:
             continue
-        for point in result.kps[idx]:
+        for point in track.kps:
             cv2.circle(frame_bgr, (int(point[0]), int(point[1])), 2, (0, 0, 255), -1)
 
     status = (
-        f"faces={len(result.boxes)} det={result.detect_ms:.1f}ms emb={result.embed_ms_total:.1f}ms"
+        f"tracks={len(overlay.tracks)} "
+        f"fresh={fresh_tracks} "
+        f"det={overlay.detect_ms:.1f}ms "
+        f"track={overlay.track_ms:.1f}ms"
     )
     cv2.putText(
         frame_bgr,
@@ -336,6 +366,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=float, default=8.0)
     parser.add_argument("--jpeg-quality", type=int, default=80)
+    parser.add_argument(
+        "--track-max-missed",
+        type=int,
+        default=3,
+        help="Keep unmatched tracks for this many frames before dropping them",
+    )
+    parser.add_argument(
+        "--track-iou-thresh",
+        type=float,
+        default=0.3,
+        help="Minimum IoU to match a detection to an existing track",
+    )
+    parser.add_argument(
+        "--track-smoothing",
+        type=float,
+        default=0.65,
+        help="Detection weight for smoothing track boxes and landmarks (0..1)",
+    )
     parser.add_argument(
         "--ram-cap-mb",
         type=float,

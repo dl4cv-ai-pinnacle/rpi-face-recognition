@@ -20,6 +20,9 @@ rpicam-hello --list-cameras
 
 ```bash
 python3 slop/valenia/scripts/live_camera_server.py \
+  --track-max-missed 3 \
+  --track-iou-thresh 0.3 \
+  --track-smoothing 0.65 \
   --ram-cap-mb 4096
 ```
 
@@ -47,6 +50,6 @@ Other model and detector flags match the existing benchmark script defaults.
 ## Notes
 
 - The capture loop keeps only the latest encoded JPEG in memory, so clients do not build up frame queues.
-- Frames are annotated with face boxes, landmarks, and per-frame pipeline timings from `FacePipeline`.
+- Frames are annotated with stable track IDs, smoothed boxes/landmarks, and per-frame detection/tracking timings.
 - The script exits early with a clear message if no camera is detected.
 - The default RAM cap is `4096 MiB`.
