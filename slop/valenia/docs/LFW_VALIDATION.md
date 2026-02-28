@@ -87,10 +87,9 @@ From `docs/metrics/lfw_dev_view2_baseline.json`:
 
 ## INT8 Comparison (2026-02-28)
 
-Dynamic INT8 quantization of the recognition model was validated on this Pi by
-creating `slop/valenia/models/buffalo_sc/w600k_mbf.int8.onnx` in an isolated
-`uv` environment with `onnx==1.20.1` and `onnxruntime==1.24.2`, then running
-the normal evaluation script with `--rec-model`.
+The recognition model was quantized to
+`slop/valenia/models/buffalo_sc/w600k_mbf.int8.onnx`, then evaluated with the
+same protocol as the FP32 baseline.
 
 From `slop/valenia/docs/metrics/lfw_view2_int8_2026-02-28.json`:
 
@@ -108,3 +107,6 @@ From `slop/valenia/docs/metrics/lfw_view2_int8_2026-02-28.json`:
 Compared with the FP32 baseline, recognition quality is effectively unchanged,
 while embedding latency improves by `0.63 ms / face` and peak RSS drops by
 `6.00 MiB`.
+
+For the quantization workflow and environment note, see
+`slop/valenia/docs/BENCHMARK_FINDINGS_2026-02-28.md`.

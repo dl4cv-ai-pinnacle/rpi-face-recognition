@@ -52,11 +52,7 @@ python3 slop/valenia/scripts/benchmark_pipeline.py \
 
 ## INT8 Quantization
 
-Python `3.13` works here for quantization. The only broken path is Debian's
-system `python3-onnx` + `python3-onnxruntime` import path for
-`onnxruntime.quantization`.
-
-Use `uv --isolated` to create the INT8 model, then run the normal scripts with
+Create the INT8 model with `uv --isolated`, then run the normal scripts with
 `--rec-model`:
 
 ```bash
@@ -65,6 +61,9 @@ uv run --isolated --python 3.13 \
   --with onnxruntime==1.24.2 \
   python -c 'from pathlib import Path; from onnxruntime.quantization import QuantType, quantize_dynamic; src=Path("slop/valenia/models/buffalo_sc/w600k_mbf.onnx"); dst=Path("slop/valenia/models/buffalo_sc/w600k_mbf.int8.onnx"); quantize_dynamic(model_input=str(src), model_output=str(dst), op_types_to_quantize=["MatMul","Gemm"], weight_type=QuantType.QInt8, per_channel=False)'
 ```
+
+For the package nuance and measured INT8 deltas, see
+`slop/valenia/docs/BENCHMARK_FINDINGS_2026-02-28.md`.
 
 ## Tooling
 
