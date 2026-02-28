@@ -23,6 +23,8 @@ python3 slop/valenia/scripts/live_camera_server.py \
   --track-max-missed 3 \
   --track-iou-thresh 0.3 \
   --track-smoothing 0.65 \
+  --gallery-dir data/gallery \
+  --match-threshold 0.228 \
   --ram-cap-mb 4096
 ```
 
@@ -31,6 +33,7 @@ The server binds to `0.0.0.0:8000` by default.
 ## Endpoints
 
 - `/` returns a tiny HTML page with an `<img>` tag pointed at the stream.
+- `/` also includes a simple upload form for enrolling identities by name.
 - `/stream.mjpg` returns an MJPEG stream (`multipart/x-mixed-replace`).
 
 ## Useful flags
@@ -50,6 +53,7 @@ Other model and detector flags match the existing benchmark script defaults.
 ## Notes
 
 - The capture loop keeps only the latest encoded JPEG in memory, so clients do not build up frame queues.
-- Frames are annotated with stable track IDs, smoothed boxes/landmarks, and per-frame detection/tracking timings.
+- Frames are annotated with stable track IDs, smoothed boxes/landmarks, match labels, and per-frame timings.
+- Uploaded photos are stored under `slop/valenia/data/gallery/<identity>/`.
 - The script exits early with a clear message if no camera is detected.
 - The default RAM cap is `4096 MiB`.

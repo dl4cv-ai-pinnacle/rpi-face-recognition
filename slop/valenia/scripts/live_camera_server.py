@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import html
 import sys
 import threading
 import time
 from dataclasses import dataclass
+from email.parser import BytesParser
+from email.policy import default as email_default_policy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +23,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from arcface import ArcFaceEmbedder
+from gallery import EnrollmentResult, GalleryMatch, GalleryStore
 from pipeline import FacePipeline
 from runtime_utils import MemoryStats, UInt8Array, enforce_memory_cap
 from scrfd import SCRFDDetector
@@ -54,6 +58,44 @@ HTML_PAGE = """<!doctype html>
       margin: 0 0 1rem;
       opacity: 0.85;
     }
+    section {
+      margin: 0 0 1rem;
+      padding: 1rem;
+      border: 1px solid #2b3a42;
+      border-radius: 0.5rem;
+      background: rgba(255, 255, 255, 0.03);
+    }
+    form {
+      display: grid;
+      gap: 0.75rem;
+    }
+    label {
+      display: grid;
+      gap: 0.35rem;
+      font-size: 0.95rem;
+    }
+    input,
+    button {
+      font: inherit;
+    }
+    input[type="text"],
+    input[type="file"] {
+      padding: 0.6rem;
+      border-radius: 0.4rem;
+      border: 1px solid #2b3a42;
+      background: #13232d;
+      color: #f5f5f5;
+    }
+    button {
+      width: fit-content;
+      padding: 0.7rem 1rem;
+      border: 0;
+      border-radius: 0.4rem;
+      background: #3aa17e;
+      color: #08120d;
+      font-weight: 700;
+      cursor: pointer;
+    }
     img {
       width: 100%;
       height: auto;
@@ -71,6 +113,19 @@ HTML_PAGE = """<!doctype html>
   <main>
     <h1>Valenia Live Camera</h1>
     <p>MJPEG stream: <code>/stream.mjpg</code></p>
+    <section>
+      <form action="/enroll" method="post" enctype="multipart/form-data">
+        <label>
+          Name
+          <input type="text" name="name" required>
+        </label>
+        <label>
+          Photos
+          <input type="file" name="photos" accept="image/*" multiple required>
+        </label>
+        <button type="submit">Enroll Identity</button>
+      </form>
+    </section>
     <img src="/stream.mjpg" alt="Live camera stream">
   </main>
 </body>
@@ -86,18 +141,32 @@ class StreamSnapshot:
 
 
 @dataclass(frozen=True)
+class OverlayFace:
+    track: Track
+    match: GalleryMatch | None
+
+
+@dataclass(frozen=True)
 class TrackingOverlay:
-    tracks: list[Track]
+    faces: list[OverlayFace]
     detect_ms: float
     track_ms: float
+    embed_ms_total: float
+    gallery_size: int
 
 
 class CameraStreamer:
     """Capture frames in one background loop and keep only the latest JPEG."""
 
-    def __init__(self, args: argparse.Namespace, pipeline: FacePipeline) -> None:
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        pipeline: FacePipeline,
+        gallery: GalleryStore,
+    ) -> None:
         self.args = args
         self.pipeline = pipeline
+        self.gallery = gallery
         self._camera = None
         self._condition = threading.Condition()
         self._frame_id = 0
@@ -113,6 +182,7 @@ class CameraStreamer:
             max_missed=args.track_max_missed,
             smoothing=args.track_smoothing,
         )
+        self._track_matches: dict[int, GalleryMatch] = {}
 
     def start(self) -> None:
         from picamera2 import Picamera2
@@ -130,7 +200,6 @@ class CameraStreamer:
         self._camera.configure(config)
         self._camera.start()
 
-        # Give auto-exposure a moment to settle before clients connect.
         time.sleep(1.0)
 
         self._thread = threading.Thread(target=self._capture_loop, name="live-camera", daemon=True)
@@ -178,9 +247,34 @@ class CameraStreamer:
                 track_t0 = time.perf_counter()
                 tracks = self._tracker.update(det.boxes, det.kps, max_tracks=self.args.max_faces)
                 track_ms = (time.perf_counter() - track_t0) * 1000.0
+
+                live_ids = {track.track_id for track in tracks}
+                self._track_matches = {
+                    track_id: match
+                    for track_id, match in self._track_matches.items()
+                    if track_id in live_ids
+                }
+
+                overlay_faces: list[OverlayFace] = []
+                embed_ms_total = 0.0
+                for track in tracks:
+                    match = self._track_matches.get(track.track_id)
+                    if track.matched and track.kps is not None:
+                        emb, emb_ms = self.pipeline.embed_from_kps(frame_bgr, track.kps)
+                        embed_ms_total += emb_ms
+                        match = self.gallery.match(emb, threshold=self.args.match_threshold)
+                        self._track_matches[track.track_id] = match
+                    overlay_faces.append(OverlayFace(track=track, match=match))
+
                 annotate_in_place(
                     frame_bgr,
-                    TrackingOverlay(tracks=tracks, detect_ms=detect_ms, track_ms=track_ms),
+                    TrackingOverlay(
+                        faces=overlay_faces,
+                        detect_ms=detect_ms,
+                        track_ms=track_ms,
+                        embed_ms_total=embed_ms_total,
+                        gallery_size=self.gallery.count(),
+                    ),
                 )
                 ok, encoded = cv2.imencode(
                     ".jpg",
@@ -221,6 +315,7 @@ class LiveCameraHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
     streamer: CameraStreamer
+    gallery: GalleryStore
 
 
 class LiveCameraHandler(BaseHTTPRequestHandler):
@@ -235,9 +330,19 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/enroll":
+            self._handle_enroll()
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
     @property
     def streamer(self) -> CameraStreamer:
         return self.server.streamer  # type: ignore[attr-defined]
+
+    @property
+    def gallery(self) -> GalleryStore:
+        return self.server.gallery  # type: ignore[attr-defined]
 
     def _serve_index(self) -> None:
         body = HTML_PAGE.encode("utf-8")
@@ -275,18 +380,97 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 break
 
+    def _handle_enroll(self) -> None:
+        try:
+            name, uploads = self._parse_enroll_request()
+            result = self.gallery.enroll(name, uploads, self.streamer.pipeline)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Enrollment failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Enrollment failed",
+                str(exc),
+            )
+            return
+
+        self._serve_message_page(
+            HTTPStatus.OK,
+            "Enrollment saved",
+            _format_enrollment_message(result),
+        )
+
+    def _parse_enroll_request(self) -> tuple[str, list[tuple[str, bytes]]]:
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            raise ValueError("Expected multipart/form-data upload")
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length header") from exc
+        if content_length <= 0:
+            raise ValueError("Empty request body")
+
+        payload = self.rfile.read(content_length)
+        envelope = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + payload
+        message = BytesParser(policy=email_default_policy).parsebytes(envelope)
+        if not message.is_multipart():
+            raise ValueError("Expected multipart form fields")
+
+        name = ""
+        uploads: list[tuple[str, bytes]] = []
+        for part in message.iter_parts():
+            if part.get_content_disposition() != "form-data":
+                continue
+            field_name = part.get_param("name", header="Content-Disposition")
+            if field_name is None:
+                continue
+            if field_name == "name":
+                text_value = part.get_content()
+                if isinstance(text_value, str):
+                    name = text_value.strip()
+                continue
+            if field_name == "photos":
+                body = part.get_payload(decode=True)
+                if not isinstance(body, bytes):
+                    continue
+                filename = part.get_filename() or "upload"
+                uploads.append((filename, body))
+
+        if not name:
+            raise ValueError("Name is required")
+        if not uploads:
+            raise ValueError("At least one photo is required")
+        return name, uploads
+
+    def _serve_message_page(self, status: HTTPStatus, title: str, message: str) -> None:
+        body = _render_message_page(title, message).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, format: str, *args: object) -> None:
         return
 
 
 def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
     fresh_tracks = 0
-    for track in overlay.tracks:
+    recognized_faces = 0
+    for face in overlay.faces:
+        track = face.track
         box = track.box
         x1, y1, x2, y2, score = box
         color = (0, 255, 0) if track.matched else (0, 191, 255)
         if track.matched:
             fresh_tracks += 1
+        if face.match is not None and face.match.matched:
+            color = (64, 224, 208)
+            recognized_faces += 1
         cv2.rectangle(
             frame_bgr,
             (int(x1), int(y1)),
@@ -297,6 +481,8 @@ def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
         label = f"id={track.track_id} {score:.2f}"
         if not track.matched:
             label = f"{label} hold"
+        elif face.match is not None and face.match.matched and face.match.name is not None:
+            label = f"{label} {face.match.name} {face.match.score:.2f}"
         cv2.putText(
             frame_bgr,
             label,
@@ -312,10 +498,12 @@ def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
             cv2.circle(frame_bgr, (int(point[0]), int(point[1])), 2, (0, 0, 255), -1)
 
     status = (
-        f"tracks={len(overlay.tracks)} "
+        f"tracks={len(overlay.faces)} "
         f"fresh={fresh_tracks} "
+        f"known={recognized_faces}/{overlay.gallery_size} "
         f"det={overlay.detect_ms:.1f}ms "
-        f"track={overlay.track_ms:.1f}ms"
+        f"track={overlay.track_ms:.1f}ms "
+        f"emb={overlay.embed_ms_total:.1f}ms"
     )
     cv2.putText(
         frame_bgr,
@@ -385,6 +573,17 @@ def parse_args() -> argparse.Namespace:
         help="Detection weight for smoothing track boxes and landmarks (0..1)",
     )
     parser.add_argument(
+        "--gallery-dir",
+        default="data/gallery",
+        help="Directory for enrolled gallery data, relative to slop/valenia/",
+    )
+    parser.add_argument(
+        "--match-threshold",
+        type=float,
+        default=0.228,
+        help="Cosine similarity threshold for matching an enrolled identity",
+    )
+    parser.add_argument(
         "--ram-cap-mb",
         type=float,
         default=4096.0,
@@ -404,6 +603,7 @@ def main() -> int:
     try:
         enforce_memory_cap(args.ram_cap_mb, "live camera startup")
         pipeline = build_pipeline(args)
+        gallery = GalleryStore(ROOT / args.gallery_dir)
     except FileNotFoundError as exc:
         print(exc)
         return 2
@@ -411,7 +611,7 @@ def main() -> int:
         print(exc)
         return 4
 
-    streamer = CameraStreamer(args, pipeline)
+    streamer = CameraStreamer(args, pipeline, gallery)
     try:
         streamer.start()
     except RuntimeError as exc:
@@ -425,6 +625,7 @@ def main() -> int:
     try:
         server = LiveCameraHTTPServer((args.host, args.port), LiveCameraHandler)
         server.streamer = streamer
+        server.gallery = gallery
         print(f"Serving MJPEG on http://{args.host}:{args.port}/")
         server.serve_forever(poll_interval=0.5)
     except OSError as exc:
@@ -440,6 +641,52 @@ def main() -> int:
             server.server_close()
         streamer.stop()
     return 0
+
+
+def _render_message_page(title: str, message: str) -> str:
+    safe_title = html.escape(title)
+    safe_message = html.escape(message)
+    return f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>{safe_title}</title>
+  <style>
+    body {{ margin: 0; font-family: sans-serif; background: #101820; color: #f5f5f5;
+      min-height: 100vh; display: grid; place-items: center; }}
+    main {{ width: min(100%, 720px); padding: 1rem; box-sizing: border-box; }}
+    article {{ border: 1px solid #2b3a42; border-radius: 0.5rem; padding: 1rem;
+      background: rgba(255, 255, 255, 0.03); }}
+    a {{ color: #b9fbc0; }}
+    pre {{ white-space: pre-wrap; font-family: monospace; }}
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>{safe_title}</h1>
+      <pre>{safe_message}</pre>
+      <p><a href=\"/\">Back to live stream</a></p>
+    </article>
+  </main>
+</body>
+</html>
+"""
+
+
+def _format_enrollment_message(result: EnrollmentResult) -> str:
+    lines = [
+        f"Saved identity: {result.name} ({result.slug})",
+        f"Accepted photos: {result.sample_count}",
+    ]
+    if result.accepted_files:
+        lines.append("Accepted:")
+        lines.extend(f"- {name}" for name in result.accepted_files)
+    if result.rejected_files:
+        lines.append("Rejected:")
+        lines.extend(f"- {name}" for name in result.rejected_files)
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
