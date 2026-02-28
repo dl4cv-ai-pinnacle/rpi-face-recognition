@@ -25,7 +25,7 @@ if str(ROOT / "src") not in sys.path:
 from arcface import ArcFaceEmbedder
 from gallery import EnrollmentResult, GalleryMatch, GalleryStore
 from pipeline import FacePipeline
-from runtime_utils import MemoryStats, UInt8Array, enforce_memory_cap
+from runtime_utils import Float32Array, MemoryStats, UInt8Array, enforce_memory_cap
 from scrfd import SCRFDDetector
 from tracking import SimpleFaceTracker, Track
 
@@ -155,6 +155,13 @@ class TrackingOverlay:
     gallery_size: int
 
 
+@dataclass(frozen=True)
+class TrackIdentityState:
+    match: GalleryMatch
+    last_embed_frame: int
+    last_embed_box: Float32Array
+
+
 class CameraStreamer:
     """Capture frames in one background loop and keep only the latest JPEG."""
 
@@ -176,13 +183,14 @@ class CameraStreamer:
         self._thread: threading.Thread | None = None
         self._frame_interval = 1.0 / args.fps if args.fps > 0 else 0.0
         self._frames_processed = 0
+        self._frame_counter = 0
         self._memory: MemoryStats = enforce_memory_cap(args.ram_cap_mb, "live camera startup")
         self._tracker = SimpleFaceTracker(
             iou_threshold=args.track_iou_thresh,
             max_missed=args.track_max_missed,
             smoothing=args.track_smoothing,
         )
-        self._track_matches: dict[int, GalleryMatch] = {}
+        self._track_states: dict[int, TrackIdentityState] = {}
 
     def start(self) -> None:
         from picamera2 import Picamera2
@@ -232,6 +240,25 @@ class CameraStreamer:
     def memory(self) -> MemoryStats:
         return self._memory
 
+    def _should_refresh_embedding(
+        self,
+        track: Track,
+        state: TrackIdentityState | None,
+    ) -> bool:
+        if track.kps is None or not track.matched:
+            return False
+        if self.args.disable_embed_refresh:
+            return True
+        if state is None:
+            return True
+
+        refresh_frames = max(0, int(self.args.embed_refresh_frames))
+        if refresh_frames > 0 and (self._frame_counter - state.last_embed_frame) >= refresh_frames:
+            return True
+
+        current_box = np.asarray(track.box, dtype=np.float32)
+        return _box_iou(current_box[:4], state.last_embed_box[:4]) < self.args.embed_refresh_iou
+
     def _capture_loop(self) -> None:
         camera = self._camera
         if camera is None:
@@ -241,6 +268,7 @@ class CameraStreamer:
         next_frame_due = time.perf_counter()
         while not self._stop_event.is_set():
             try:
+                self._frame_counter += 1
                 frame_rgb = np.asarray(camera.capture_array(), dtype=np.uint8)
                 frame_bgr = np.asarray(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), dtype=np.uint8)
                 det, detect_ms = self.pipeline.detect(frame_bgr)
@@ -249,21 +277,30 @@ class CameraStreamer:
                 track_ms = (time.perf_counter() - track_t0) * 1000.0
 
                 live_ids = {track.track_id for track in tracks}
-                self._track_matches = {
-                    track_id: match
-                    for track_id, match in self._track_matches.items()
+                self._track_states = {
+                    track_id: state
+                    for track_id, state in self._track_states.items()
                     if track_id in live_ids
                 }
 
                 overlay_faces: list[OverlayFace] = []
                 embed_ms_total = 0.0
                 for track in tracks:
-                    match = self._track_matches.get(track.track_id)
-                    if track.matched and track.kps is not None:
-                        emb, emb_ms = self.pipeline.embed_from_kps(frame_bgr, track.kps)
+                    state = self._track_states.get(track.track_id)
+                    match = state.match if state is not None else None
+                    if self._should_refresh_embedding(track, state):
+                        landmarks = track.kps
+                        if landmarks is None:
+                            overlay_faces.append(OverlayFace(track=track, match=match))
+                            continue
+                        emb, emb_ms = self.pipeline.embed_from_kps(frame_bgr, landmarks)
                         embed_ms_total += emb_ms
                         match = self.gallery.match(emb, threshold=self.args.match_threshold)
-                        self._track_matches[track.track_id] = match
+                        self._track_states[track.track_id] = TrackIdentityState(
+                            match=match,
+                            last_embed_frame=self._frame_counter,
+                            last_embed_box=np.asarray(track.box, dtype=np.float32),
+                        )
                     overlay_faces.append(OverlayFace(track=track, match=match))
 
                 annotate_in_place(
@@ -525,6 +562,23 @@ def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
     )
 
 
+def _box_iou(box_a: Float32Array, box_b: Float32Array) -> float:
+    x1 = max(float(box_a[0]), float(box_b[0]))
+    y1 = max(float(box_a[1]), float(box_b[1]))
+    x2 = min(float(box_a[2]), float(box_b[2]))
+    y2 = min(float(box_a[3]), float(box_b[3]))
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+
+    inter = (x2 - x1) * (y2 - y1)
+    area_a = max(0.0, float(box_a[2] - box_a[0])) * max(0.0, float(box_a[3] - box_a[1]))
+    area_b = max(0.0, float(box_b[2] - box_b[0])) * max(0.0, float(box_b[3] - box_b[1]))
+    union = area_a + area_b - inter
+    if union <= 0.0:
+        return 0.0
+    return inter / union
+
+
 def build_pipeline(args: argparse.Namespace) -> FacePipeline:
     det_model = ROOT / args.det_model
     rec_model = ROOT / args.rec_model
@@ -582,6 +636,23 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.228,
         help="Cosine similarity threshold for matching an enrolled identity",
+    )
+    parser.add_argument(
+        "--embed-refresh-frames",
+        type=int,
+        default=5,
+        help="Refresh a track's embedding after this many frames; <=0 disables periodic refresh",
+    )
+    parser.add_argument(
+        "--embed-refresh-iou",
+        type=float,
+        default=0.85,
+        help="Refresh a track's embedding when IoU drops below this value",
+    )
+    parser.add_argument(
+        "--disable-embed-refresh",
+        action="store_true",
+        help="Disable selective embedding refresh and recompute embeddings on every fresh track",
     )
     parser.add_argument(
         "--ram-cap-mb",

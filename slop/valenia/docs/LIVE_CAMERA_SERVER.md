@@ -25,6 +25,8 @@ python3 slop/valenia/scripts/live_camera_server.py \
   --track-smoothing 0.65 \
   --gallery-dir data/gallery \
   --match-threshold 0.228 \
+  --embed-refresh-frames 5 \
+  --embed-refresh-iou 0.85 \
   --ram-cap-mb 4096
 ```
 
@@ -49,11 +51,14 @@ python3 slop/valenia/scripts/live_camera_server.py \
 ```
 
 Other model and detector flags match the existing benchmark script defaults.
+Use `--disable-embed-refresh` to force the older behavior and recompute face
+embeddings on every fresh tracked frame.
 
 ## Notes
 
 - The capture loop keeps only the latest encoded JPEG in memory, so clients do not build up frame queues.
 - Frames are annotated with stable track IDs, smoothed boxes/landmarks, match labels, and per-frame timings.
+- By default, identity embeddings are refreshed only for new, stale, or moved tracks.
 - Uploaded photos are stored under `slop/valenia/data/gallery/<identity>/`.
 - The script exits early with a clear message if no camera is detected.
 - The default RAM cap is `4096 MiB`.
