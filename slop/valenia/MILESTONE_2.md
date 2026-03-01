@@ -1,11 +1,13 @@
 # Milestone 2 -- General Overview
 
-**Project:** Real-Time Face Recognition on Raspberry Pi 5
-**Team:** AI Pinnacle
-**Team member (this report):** Andrii Valenia
-**Date:** 2026-03-01
-**Repository:** [github.com/dl4cv-ai-pinnacle/rpi-face-recognition](https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition)
-**Branch:** [feat/#1-valenia](https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition/tree/feat/%231-valenia)
+| | |
+| --- | --- |
+| **Project** | Real-Time Face Recognition on Raspberry Pi 5 |
+| **Team** | AI Pinnacle |
+| **Author** | Andrii Valenia |
+| **Date** | 2026-03-01 |
+| **Repository** | [github.com/dl4cv-ai-pinnacle/rpi-face-recognition](https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition) |
+| **Branch** | [feat/#1-valenia](https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition/tree/feat/%231-valenia) |
 
 _This report was generated with the help of Claude Opus 4.6._
 
