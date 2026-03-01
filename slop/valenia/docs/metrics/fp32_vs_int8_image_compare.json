@@ -1,0 +1,29 @@
+{
+  "a": {
+    "label": "fp32",
+    "avg_loop_ms": 58.814,
+    "avg_detect_ms": 22.893,
+    "avg_embed_ms": 28.594,
+    "avg_faces": 1.0,
+    "avg_fps": 17.003,
+    "final_current_rss_mb": 251.531,
+    "final_peak_rss_mb": 251.531
+  },
+  "b": {
+    "label": "int8",
+    "avg_loop_ms": 52.781,
+    "avg_detect_ms": 23.136,
+    "avg_embed_ms": 28.75,
+    "avg_faces": 1.0,
+    "avg_fps": 18.946,
+    "final_current_rss_mb": 258.984,
+    "final_peak_rss_mb": 258.984
+  },
+  "delta": {
+    "avg_loop_ms": -6.032819267420564,
+    "avg_detect_ms": 0.2424596003644801,
+    "avg_embed_ms": 0.15616440044444246,
+    "avg_fps": 1.94338728102111,
+    "peak_rss_mb": 7.453125
+  }
+}

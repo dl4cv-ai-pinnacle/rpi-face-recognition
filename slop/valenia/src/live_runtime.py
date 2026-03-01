@@ -10,8 +10,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from gallery import EnrollmentResult, GalleryMatch, GalleryStore
-from pipeline import FacePipeline
+from contracts import GalleryLike, PipelineLike
+from gallery import EnrollmentResult, GalleryMatch
 from runtime_utils import Float32Array, MemoryStats, UInt8Array
 from tracking import SimpleFaceTracker, Track
 
@@ -255,8 +255,8 @@ class LiveRuntime:
 
     def __init__(
         self,
-        pipeline: FacePipeline,
-        gallery: GalleryStore,
+        pipeline: PipelineLike,
+        gallery: GalleryLike,
         config: LiveRuntimeConfig,
     ) -> None:
         self.pipeline = pipeline
@@ -318,7 +318,7 @@ class LiveRuntime:
                 emb, emb_ms = self.pipeline.embed_from_kps(frame_bgr, landmarks)
                 embed_ms_total += emb_ms
                 refreshes += 1
-                match = self.gallery.match(emb, threshold=self.config.match_threshold)
+                match = self.gallery.match(emb, self.config.match_threshold)
                 self._track_states[track.track_id] = TrackIdentityState(
                     match=match,
                     last_embed_frame=self._frame_counter,

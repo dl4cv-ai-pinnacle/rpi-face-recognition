@@ -23,12 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from arcface import ArcFaceEmbedder
+from contracts import PipelineLike
 from gallery import EnrollmentResult, GalleryStore
 from live_runtime import LiveRuntime, LiveRuntimeConfig, annotate_in_place
-from pipeline import FacePipeline
+from pipeline_factory import PipelineSpec, build_face_pipeline, parse_size, resolve_project_path
 from runtime_utils import MemoryStats, enforce_memory_cap, get_memory_stats
-from scrfd import SCRFDDetector
 
 HTML_PAGE = """<!doctype html>
 <html lang="en">
@@ -457,25 +456,26 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         return
 
 
-def build_pipeline(args: argparse.Namespace) -> FacePipeline:
-    det_model = ROOT / args.det_model
-    rec_model = ROOT / args.rec_model
+def build_pipeline(args: argparse.Namespace) -> PipelineLike:
+    det_model = resolve_project_path(ROOT, args.det_model)
+    rec_model = resolve_project_path(ROOT, args.rec_model)
     if not det_model.exists() or not rec_model.exists():
         raise FileNotFoundError("Missing model files. Run: ./scripts/download_models.sh")
 
-    detector = SCRFDDetector(str(det_model), det_thresh=args.det_thresh)
-    embedder = ArcFaceEmbedder(str(rec_model))
-    return FacePipeline(
-        detector=detector,
-        embedder=embedder,
-        det_size=parse_size(args.det_size),
-        max_faces=args.max_faces,
+    return build_face_pipeline(
+        PipelineSpec(
+            det_model=det_model,
+            rec_model=rec_model,
+            det_size=parse_size(args.det_size),
+            det_thresh=args.det_thresh,
+            max_faces=args.max_faces,
+        )
     )
 
 
-def build_runtime(args: argparse.Namespace, pipeline: FacePipeline) -> LiveRuntime:
-    gallery = GalleryStore(ROOT / args.gallery_dir)
-    metrics_json_path = ROOT / args.metrics_json if args.metrics_json else None
+def build_runtime(args: argparse.Namespace, pipeline: PipelineLike) -> LiveRuntime:
+    gallery = GalleryStore(resolve_project_path(ROOT, args.gallery_dir))
+    metrics_json_path = resolve_project_path(ROOT, args.metrics_json) if args.metrics_json else None
     config = LiveRuntimeConfig(
         max_faces=args.max_faces,
         det_every=args.det_every,
@@ -578,11 +578,6 @@ def parse_args() -> argparse.Namespace:
         help="Abort if current or peak RSS exceeds this limit; <=0 disables the check",
     )
     return parser.parse_args()
-
-
-def parse_size(value: str) -> tuple[int, int]:
-    width, height = value.lower().split("x", maxsplit=1)
-    return int(width), int(height)
 
 
 def main() -> int:

@@ -18,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from arcface import ArcFaceEmbedder
-from pipeline import FacePipeline
+from contracts import PipelineLike
+from pipeline_factory import PipelineSpec, build_face_pipeline, parse_size, resolve_project_path
 from runtime_utils import (
     Float32Array,
     Float64Array,
@@ -29,7 +29,6 @@ from runtime_utils import (
     enforce_memory_cap,
     quantize_onnx_model,
 )
-from scrfd import SCRFDDetector
 
 
 @dataclass(frozen=True)
@@ -87,16 +86,6 @@ def parse_args() -> argparse.Namespace:
         help="Rebuild the quantized ArcFace model even if the output file already exists",
     )
     return parser.parse_args()
-
-
-def parse_size(value: str) -> tuple[int, int]:
-    w, h = value.lower().split("x")
-    return int(w), int(h)
-
-
-def resolve_output_path(path_str: str) -> Path:
-    path = Path(path_str)
-    return path if path.is_absolute() else ROOT / path
 
 
 def parse_pairs_file(pairs_file: Path, lfw_dir: Path, max_pairs: int = 0) -> list[PairSample]:
@@ -179,7 +168,7 @@ def parse_view2_pairs_file(
 
 def extract_embedding(
     image_path: Path,
-    pipeline: FacePipeline,
+    pipeline: PipelineLike,
 ) -> EmbeddingRecord:
     image = cv2.imread(str(image_path))
     if image is None:
@@ -385,12 +374,14 @@ def main() -> int:
         args = parse_args()
         startup_memory = enforce_memory_cap(args.ram_cap_mb, "startup")
 
-        det_model = ROOT / args.det_model
-        rec_model = ROOT / args.rec_model
-        lfw_dir = ROOT / args.lfw_dir
-        train_pairs_file = ROOT / args.train_pairs
-        test_pairs_file = ROOT / args.test_pairs
-        view2_pairs_file = ROOT / args.view2_pairs if args.view2_pairs else None
+        det_model = resolve_project_path(ROOT, args.det_model)
+        rec_model = resolve_project_path(ROOT, args.rec_model)
+        lfw_dir = resolve_project_path(ROOT, args.lfw_dir)
+        train_pairs_file = resolve_project_path(ROOT, args.train_pairs)
+        test_pairs_file = resolve_project_path(ROOT, args.test_pairs)
+        view2_pairs_file = (
+            resolve_project_path(ROOT, args.view2_pairs) if args.view2_pairs else None
+        )
 
         required_paths = [det_model, rec_model, lfw_dir, train_pairs_file, test_pairs_file]
         if view2_pairs_file is not None:
@@ -404,7 +395,9 @@ def main() -> int:
         quantization: QuantizationReport | None = None
         if args.quantize_rec or args.quantized_rec_model:
             quantized_rec_path = (
-                resolve_output_path(args.quantized_rec_model) if args.quantized_rec_model else None
+                resolve_project_path(ROOT, args.quantized_rec_model)
+                if args.quantized_rec_model
+                else None
             )
             try:
                 rec_model, quantization = quantize_onnx_model(
@@ -416,13 +409,14 @@ def main() -> int:
                 print(exc)
                 return 5
 
-        detector = SCRFDDetector(str(det_model), det_thresh=args.det_thresh)
-        embedder = ArcFaceEmbedder(str(rec_model))
-        pipeline = FacePipeline(
-            detector=detector,
-            embedder=embedder,
-            det_size=parse_size(args.det_size),
-            max_faces=1,
+        pipeline = build_face_pipeline(
+            PipelineSpec(
+                det_model=det_model,
+                rec_model=rec_model,
+                det_size=parse_size(args.det_size),
+                det_thresh=args.det_thresh,
+                max_faces=1,
+            )
         )
         post_init_memory = enforce_memory_cap(args.ram_cap_mb, "pipeline initialization")
 
@@ -649,7 +643,7 @@ def main() -> int:
         }
 
         if args.output_json:
-            out_path = ROOT / args.output_json
+            out_path = resolve_project_path(ROOT, args.output_json)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
             print(f"Saved JSON report: {out_path}")

@@ -11,7 +11,7 @@ Command:
 ```bash
 python3 -u slop/valenia/scripts/benchmark_pipeline.py \
   --mode image \
-  --image slop/valenia/data/lena.jpg \
+  --image data/lena.jpg \
   --runs 50 \
   --det-every 1 \
   --ram-cap-mb 4096
@@ -34,7 +34,7 @@ Command:
 python3 -u slop/valenia/scripts/evaluate_lfw.py \
   --view2-pairs data/lfw/pairs.txt \
   --ram-cap-mb 4096 \
-  --output-json slop/valenia/docs/metrics/lfw_view2_fp32_2026-02-28.json
+  --output-json docs/metrics/lfw_view2_fp32_2026-02-28.json
 ```
 
 Results:
@@ -87,7 +87,7 @@ python3 -u slop/valenia/scripts/evaluate_lfw.py \
   --view2-pairs data/lfw/pairs.txt \
   --rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
   --ram-cap-mb 4096 \
-  --output-json slop/valenia/docs/metrics/lfw_view2_int8_2026-02-28.json
+  --output-json docs/metrics/lfw_view2_int8_2026-02-28.json
 ```
 
 Results:
@@ -124,7 +124,7 @@ Command:
 ```bash
 python3 -u slop/valenia/scripts/benchmark_pipeline.py \
   --mode image \
-  --image slop/valenia/data/lena.jpg \
+  --image data/lena.jpg \
   --runs 50 \
   --det-every 1 \
   --rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
@@ -147,6 +147,34 @@ FP32 delta:
 - Avg detection latency: `-1.60 ms`
 - Avg embedding latency: `-0.99 ms/frame`
 - Peak RSS: `-5.70 MiB`
+
+### Variant Comparison Script (FP32 vs INT8)
+
+Command:
+
+```bash
+python3 slop/valenia/scripts/compare_pipeline_variants.py \
+  --image data/lena.jpg \
+  --runs 30 \
+  --a-label fp32 \
+  --a-rec-model models/buffalo_sc/w600k_mbf.onnx \
+  --b-label int8 \
+  --b-rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
+  --output-json docs/metrics/fp32_vs_int8_image_compare.json
+```
+
+Results:
+
+- FP32 avg loop latency: `58.81 ms`
+- INT8 avg loop latency: `52.78 ms`
+- FP32 avg FPS: `17.00`
+- INT8 avg FPS: `18.95`
+- Delta loop latency: `-6.03 ms`
+- Delta FPS: `+1.94`
+
+JSON artifact:
+
+- `slop/valenia/docs/metrics/fp32_vs_int8_image_compare.json`
 
 ## Practical Takeaway
 

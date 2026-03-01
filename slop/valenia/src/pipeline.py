@@ -5,10 +5,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from arcface import ArcFaceEmbedder
+from contracts import DetectionLike, DetectorLike, EmbedderLike
 from face_align import norm_crop
 from runtime_utils import Float32Array, UInt8Array
-from scrfd import DetectionResult, SCRFDDetector
 
 
 @dataclass
@@ -25,8 +24,8 @@ class FacePipeline:
 
     def __init__(
         self,
-        detector: SCRFDDetector,
-        embedder: ArcFaceEmbedder,
+        detector: DetectorLike,
+        embedder: EmbedderLike,
         det_size: tuple[int, int] = (320, 320),
         max_faces: int = 3,
     ) -> None:
@@ -35,9 +34,9 @@ class FacePipeline:
         self.det_size = det_size
         self.max_faces = max_faces
 
-    def detect(self, frame_bgr: UInt8Array) -> tuple[DetectionResult, float]:
+    def detect(self, frame_bgr: UInt8Array) -> tuple[DetectionLike, float]:
         t0 = time.perf_counter()
-        det = self.detector.detect(frame_bgr, input_size=self.det_size)
+        det = self.detector.detect(frame_bgr, self.det_size)
         t1 = time.perf_counter()
         return det, (t1 - t0) * 1000.0
 

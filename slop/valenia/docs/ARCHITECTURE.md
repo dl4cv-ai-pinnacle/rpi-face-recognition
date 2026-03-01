@@ -13,12 +13,14 @@ This project stays intentionally small and modular to follow `KISS` + `YAGNI` wh
 
 3. Prefer composition over framework complexity:
 - `FacePipeline` composes detector + embedder.
+- `pipeline_factory.py` builds swappable detector/embedder variants from one spec.
 - `LiveRuntime` owns stateful live tracking, matching, and metrics.
 - Scripts orchestrate workflows (benchmark, dataset validation, HTTP serving).
 
 4. Separate concerns:
 - `src/`: reusable pipeline logic.
 - `scripts/`: executable workflows.
+- `tests/`: pytest coverage for dependency seams and runtime behavior.
 - `docs/metrics/`: reproducible benchmark outputs.
 
 ## Extension Points

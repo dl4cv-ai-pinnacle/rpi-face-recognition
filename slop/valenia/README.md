@@ -5,6 +5,8 @@ This is the active Raspberry Pi face-recognition setup.
 ## Quick Start
 
 Run commands from the repo root.
+When a script accepts file paths, the path values are resolved relative to
+`slop/valenia/` unless you pass an absolute path.
 
 1. Install system packages and `uv` tooling:
 
@@ -28,7 +30,7 @@ Run commands from the repo root.
 
 ```bash
 python3 -u slop/valenia/scripts/evaluate_lfw.py \
-  --output-json slop/valenia/docs/metrics/lfw_dev_baseline.json
+  --output-json docs/metrics/lfw_dev_baseline.json
 ```
 
 5. Run full view2 validation:
@@ -36,7 +38,7 @@ python3 -u slop/valenia/scripts/evaluate_lfw.py \
 ```bash
 python3 -u slop/valenia/scripts/evaluate_lfw.py \
   --view2-pairs data/lfw/pairs.txt \
-  --output-json slop/valenia/docs/metrics/lfw_dev_view2_baseline.json
+  --output-json docs/metrics/lfw_dev_view2_baseline.json
 ```
 
 6. Run the image benchmark:
@@ -44,10 +46,10 @@ python3 -u slop/valenia/scripts/evaluate_lfw.py \
 ```bash
 python3 slop/valenia/scripts/benchmark_pipeline.py \
   --mode image \
-  --image slop/valenia/data/lena.jpg \
+  --image data/lena.jpg \
   --runs 50 \
   --det-every 1 \
-  --save-output slop/valenia/data/lena_annotated.jpg
+  --save-output data/lena_annotated.jpg
 ```
 
 ## INT8 Quantization
@@ -71,10 +73,27 @@ For the package nuance and measured INT8 deltas, see
 uv sync --project slop/valenia --group dev
 uv run --project slop/valenia --group dev pre-commit install \
   --config slop/valenia/.pre-commit-config.yaml
+uv run --project slop/valenia --group dev pytest
 uv run --project slop/valenia --group dev pyright -p slop/valenia --pythonpath /usr/bin/python3
 uv run --project slop/valenia --group dev pre-commit run \
   --config slop/valenia/.pre-commit-config.yaml \
   --all-files
+```
+
+## Variant Comparison
+
+Use the shared variant runner to compare two swappable pipeline specs on the
+same image:
+
+```bash
+python3 slop/valenia/scripts/compare_pipeline_variants.py \
+  --image data/lena.jpg \
+  --runs 30 \
+  --a-label fp32 \
+  --a-rec-model models/buffalo_sc/w600k_mbf.onnx \
+  --b-label int8 \
+  --b-rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
+  --output-json docs/metrics/fp32_vs_int8_image_compare.json
 ```
 
 ## Live Camera

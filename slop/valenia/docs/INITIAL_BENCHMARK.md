@@ -15,10 +15,10 @@ INT8 comparison, use `slop/valenia/docs/BENCHMARK_FINDINGS_2026-02-28.md`.
 ```bash
 python3 slop/valenia/scripts/benchmark_pipeline.py \
   --mode image \
-  --image slop/valenia/data/lena.jpg \
+  --image data/lena.jpg \
   --runs 30 \
   --det-every 3 \
-  --save-output slop/valenia/data/lena_annotated.jpg
+  --save-output data/lena_annotated.jpg
 ```
 
 ## Results
@@ -50,6 +50,6 @@ If camera is not attached yet, run dataset-based quality + performance validatio
 ```bash
 ./slop/valenia/scripts/download_lfw_dataset.sh
 python3 -u slop/valenia/scripts/evaluate_lfw.py \
-  --view2-pairs slop/valenia/data/lfw/pairs.txt \
-  --output-json slop/valenia/docs/metrics/lfw_dev_view2_baseline.json
+  --view2-pairs data/lfw/pairs.txt \
+  --output-json docs/metrics/lfw_dev_view2_baseline.json
 ```

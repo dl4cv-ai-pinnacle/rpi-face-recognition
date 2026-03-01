@@ -28,15 +28,15 @@ Dev train/test split:
 
 ```bash
 python3 -u slop/valenia/scripts/evaluate_lfw.py \
-  --output-json slop/valenia/docs/metrics/lfw_dev_baseline.json
+  --output-json docs/metrics/lfw_dev_baseline.json
 ```
 
 Dev split + official view2 cross-validation:
 
 ```bash
 python3 -u slop/valenia/scripts/evaluate_lfw.py \
-  --view2-pairs slop/valenia/data/lfw/pairs.txt \
-  --output-json slop/valenia/docs/metrics/lfw_dev_view2_baseline.json
+  --view2-pairs data/lfw/pairs.txt \
+  --output-json docs/metrics/lfw_dev_view2_baseline.json
 ```
 
 ## Protocol

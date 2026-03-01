@@ -10,7 +10,7 @@ from threading import RLock
 
 import cv2
 import numpy as np
-from pipeline import FacePipeline
+from contracts import PipelineLike
 from runtime_utils import Float32Array, UInt8Array
 
 _SLUG_CLEAN_RE = re.compile(r"[^a-z0-9]+")
@@ -66,7 +66,7 @@ class GalleryStore:
         self,
         name: str,
         uploads: list[tuple[str, bytes]],
-        pipeline: FacePipeline,
+        pipeline: PipelineLike,
     ) -> EnrollmentResult:
         clean_name = " ".join(name.strip().split())
         if not clean_name:
