@@ -24,17 +24,11 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from arcface import ArcFaceEmbedder
-from gallery import EnrollmentResult, GalleryMatch, GalleryStore
+from gallery import EnrollmentResult, GalleryStore
+from live_runtime import LiveRuntime, LiveRuntimeConfig, annotate_in_place
 from pipeline import FacePipeline
-from runtime_utils import (
-    Float32Array,
-    MemoryStats,
-    UInt8Array,
-    enforce_memory_cap,
-    get_memory_stats,
-)
+from runtime_utils import MemoryStats, enforce_memory_cap, get_memory_stats
 from scrfd import SCRFDDetector
-from tracking import SimpleFaceTracker, Track
 
 HTML_PAGE = """<!doctype html>
 <html lang="en">
@@ -180,228 +174,12 @@ class StreamSnapshot:
     error: str | None
 
 
-@dataclass(frozen=True)
-class OverlayFace:
-    track: Track
-    match: GalleryMatch | None
-
-
-@dataclass(frozen=True)
-class TrackingOverlay:
-    faces: list[OverlayFace]
-    detect_ms: float
-    track_ms: float
-    embed_ms_total: float
-    gallery_size: int
-
-
-@dataclass(frozen=True)
-class TrackIdentityState:
-    match: GalleryMatch
-    last_embed_frame: int
-    last_embed_box: Float32Array
-
-
-@dataclass(frozen=True)
-class LiveMetricsSnapshot:
-    updated_at_epoch: float
-    uptime_seconds: float
-    frames_processed: int
-    avg_fps: float
-    avg_loop_ms: float
-    avg_detect_ms: float
-    avg_track_ms: float
-    avg_embed_ms: float
-    avg_faces_per_frame: float
-    avg_fresh_tracks_per_frame: float
-    avg_recognized_faces_per_frame: float
-    avg_refreshes_per_frame: float
-    avg_reuses_per_frame: float
-    gallery_size: int
-    current_rss_mb: float
-    peak_rss_mb: float
-    embed_refresh_enabled: bool
-    metrics_json_path: str | None
-    last_error: str | None
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "updated_at_epoch": round(self.updated_at_epoch, 3),
-            "uptime_seconds": round(self.uptime_seconds, 3),
-            "frames_processed": self.frames_processed,
-            "avg_fps": round(self.avg_fps, 3),
-            "avg_loop_ms": round(self.avg_loop_ms, 3),
-            "avg_detect_ms": round(self.avg_detect_ms, 3),
-            "avg_track_ms": round(self.avg_track_ms, 3),
-            "avg_embed_ms": round(self.avg_embed_ms, 3),
-            "avg_faces_per_frame": round(self.avg_faces_per_frame, 3),
-            "avg_fresh_tracks_per_frame": round(self.avg_fresh_tracks_per_frame, 3),
-            "avg_recognized_faces_per_frame": round(self.avg_recognized_faces_per_frame, 3),
-            "avg_refreshes_per_frame": round(self.avg_refreshes_per_frame, 3),
-            "avg_reuses_per_frame": round(self.avg_reuses_per_frame, 3),
-            "gallery_size": self.gallery_size,
-            "current_rss_mb": round(self.current_rss_mb, 3),
-            "peak_rss_mb": round(self.peak_rss_mb, 3),
-            "embed_refresh_enabled": self.embed_refresh_enabled,
-            "metrics_json_path": self.metrics_json_path,
-            "last_error": self.last_error,
-        }
-
-
-class LiveMetricsCollector:
-    """Track rolling live metrics and periodically persist them to JSON."""
-
-    def __init__(
-        self,
-        *,
-        metrics_json_path: Path | None,
-        write_every_frames: int,
-        embed_refresh_enabled: bool,
-    ) -> None:
-        self.metrics_json_path = metrics_json_path
-        self.write_every_frames = max(1, write_every_frames)
-        self.embed_refresh_enabled = embed_refresh_enabled
-        self._start_mono = time.perf_counter()
-        self._lock = threading.Lock()
-        self._frames_processed = 0
-        self._sum_loop_ms = 0.0
-        self._sum_detect_ms = 0.0
-        self._sum_track_ms = 0.0
-        self._sum_embed_ms = 0.0
-        self._sum_faces = 0
-        self._sum_fresh_tracks = 0
-        self._sum_recognized_faces = 0
-        self._sum_refreshes = 0
-        self._sum_reuses = 0
-        self._last_error: str | None = None
-        path_str = None
-        if self.metrics_json_path is not None:
-            self.metrics_json_path.parent.mkdir(parents=True, exist_ok=True)
-            path_str = str(self.metrics_json_path)
-        self._snapshot = LiveMetricsSnapshot(
-            updated_at_epoch=time.time(),
-            uptime_seconds=0.0,
-            frames_processed=0,
-            avg_fps=0.0,
-            avg_loop_ms=0.0,
-            avg_detect_ms=0.0,
-            avg_track_ms=0.0,
-            avg_embed_ms=0.0,
-            avg_faces_per_frame=0.0,
-            avg_fresh_tracks_per_frame=0.0,
-            avg_recognized_faces_per_frame=0.0,
-            avg_refreshes_per_frame=0.0,
-            avg_reuses_per_frame=0.0,
-            gallery_size=0,
-            current_rss_mb=0.0,
-            peak_rss_mb=0.0,
-            embed_refresh_enabled=self.embed_refresh_enabled,
-            metrics_json_path=path_str,
-            last_error=None,
-        )
-        self._write_snapshot(self._snapshot)
-
-    def record_frame(
-        self,
-        *,
-        loop_ms: float,
-        detect_ms: float,
-        track_ms: float,
-        embed_ms: float,
-        face_count: int,
-        fresh_tracks: int,
-        recognized_faces: int,
-        refreshes: int,
-        reuses: int,
-        gallery_size: int,
-        memory: MemoryStats,
-    ) -> None:
-        snapshot: LiveMetricsSnapshot
-        should_write: bool
-        with self._lock:
-            self._frames_processed += 1
-            self._sum_loop_ms += loop_ms
-            self._sum_detect_ms += detect_ms
-            self._sum_track_ms += track_ms
-            self._sum_embed_ms += embed_ms
-            self._sum_faces += face_count
-            self._sum_fresh_tracks += fresh_tracks
-            self._sum_recognized_faces += recognized_faces
-            self._sum_refreshes += refreshes
-            self._sum_reuses += reuses
-            snapshot = self._build_snapshot_locked(gallery_size=gallery_size, memory=memory)
-            self._snapshot = snapshot
-            should_write = self.metrics_json_path is not None and (
-                self._frames_processed % self.write_every_frames == 0
-            )
-
-        if should_write:
-            self._write_snapshot(snapshot)
-
-    def record_error(self, error: str, *, memory: MemoryStats, gallery_size: int) -> None:
-        with self._lock:
-            self._last_error = error
-            self._snapshot = self._build_snapshot_locked(gallery_size=gallery_size, memory=memory)
-            snapshot = self._snapshot
-        self._write_snapshot(snapshot)
-
-    def snapshot_dict(self) -> dict[str, object]:
-        with self._lock:
-            snapshot = self._snapshot
-        return snapshot.as_dict()
-
-    def _build_snapshot_locked(
-        self, *, gallery_size: int, memory: MemoryStats
-    ) -> LiveMetricsSnapshot:
-        frames = self._frames_processed
-        uptime = max(0.0, time.perf_counter() - self._start_mono)
-        avg_loop_ms = self._sum_loop_ms / frames if frames else 0.0
-        avg_fps = (1000.0 / avg_loop_ms) if avg_loop_ms > 0.0 else 0.0
-        path_str = str(self.metrics_json_path) if self.metrics_json_path is not None else None
-        return LiveMetricsSnapshot(
-            updated_at_epoch=time.time(),
-            uptime_seconds=uptime,
-            frames_processed=frames,
-            avg_fps=avg_fps,
-            avg_loop_ms=avg_loop_ms,
-            avg_detect_ms=(self._sum_detect_ms / frames) if frames else 0.0,
-            avg_track_ms=(self._sum_track_ms / frames) if frames else 0.0,
-            avg_embed_ms=(self._sum_embed_ms / frames) if frames else 0.0,
-            avg_faces_per_frame=(self._sum_faces / frames) if frames else 0.0,
-            avg_fresh_tracks_per_frame=(self._sum_fresh_tracks / frames) if frames else 0.0,
-            avg_recognized_faces_per_frame=(self._sum_recognized_faces / frames if frames else 0.0),
-            avg_refreshes_per_frame=(self._sum_refreshes / frames) if frames else 0.0,
-            avg_reuses_per_frame=(self._sum_reuses / frames) if frames else 0.0,
-            gallery_size=gallery_size,
-            current_rss_mb=memory.current_rss_mb,
-            peak_rss_mb=memory.peak_rss_mb,
-            embed_refresh_enabled=self.embed_refresh_enabled,
-            metrics_json_path=path_str,
-            last_error=self._last_error,
-        )
-
-    def _write_snapshot(self, snapshot: LiveMetricsSnapshot) -> None:
-        if self.metrics_json_path is None:
-            return
-        self.metrics_json_path.write_text(
-            json.dumps(snapshot.as_dict(), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-
-
 class CameraStreamer:
     """Capture frames in one background loop and keep only the latest JPEG."""
 
-    def __init__(
-        self,
-        args: argparse.Namespace,
-        pipeline: FacePipeline,
-        gallery: GalleryStore,
-        metrics_json_path: Path | None,
-    ) -> None:
+    def __init__(self, args: argparse.Namespace, runtime: LiveRuntime) -> None:
         self.args = args
-        self.pipeline = pipeline
-        self.gallery = gallery
+        self._runtime = runtime
         self._camera = None
         self._condition = threading.Condition()
         self._frame_id = 0
@@ -411,19 +189,11 @@ class CameraStreamer:
         self._thread: threading.Thread | None = None
         self._frame_interval = 1.0 / args.fps if args.fps > 0 else 0.0
         self._frames_processed = 0
-        self._frame_counter = 0
         self._memory: MemoryStats = enforce_memory_cap(args.ram_cap_mb, "live camera startup")
-        self._tracker = SimpleFaceTracker(
-            iou_threshold=args.track_iou_thresh,
-            max_missed=args.track_max_missed,
-            smoothing=args.track_smoothing,
-        )
-        self._track_states: dict[int, TrackIdentityState] = {}
-        self._metrics = LiveMetricsCollector(
-            metrics_json_path=metrics_json_path,
-            write_every_frames=args.metrics_write_every,
-            embed_refresh_enabled=not args.disable_embed_refresh,
-        )
+
+    @property
+    def runtime(self) -> LiveRuntime:
+        return self._runtime
 
     def start(self) -> None:
         from picamera2 import Picamera2
@@ -469,33 +239,6 @@ class CameraStreamer:
                 error=self._error,
             )
 
-    @property
-    def memory(self) -> MemoryStats:
-        return self._memory
-
-    @property
-    def metrics_snapshot(self) -> dict[str, object]:
-        return self._metrics.snapshot_dict()
-
-    def _should_refresh_embedding(
-        self,
-        track: Track,
-        state: TrackIdentityState | None,
-    ) -> bool:
-        if track.kps is None or not track.matched:
-            return False
-        if self.args.disable_embed_refresh:
-            return True
-        if state is None:
-            return True
-
-        refresh_frames = max(0, int(self.args.embed_refresh_frames))
-        if refresh_frames > 0 and (self._frame_counter - state.last_embed_frame) >= refresh_frames:
-            return True
-
-        current_box = np.asarray(track.box, dtype=np.float32)
-        return _box_iou(current_box[:4], state.last_embed_box[:4]) < self.args.embed_refresh_iou
-
     def _capture_loop(self) -> None:
         camera = self._camera
         if camera is None:
@@ -506,62 +249,10 @@ class CameraStreamer:
         while not self._stop_event.is_set():
             try:
                 loop_t0 = time.perf_counter()
-                self._frame_counter += 1
                 frame_rgb = np.asarray(camera.capture_array(), dtype=np.uint8)
                 frame_bgr = np.asarray(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), dtype=np.uint8)
-                det, detect_ms = self.pipeline.detect(frame_bgr)
-                track_t0 = time.perf_counter()
-                tracks = self._tracker.update(det.boxes, det.kps, max_tracks=self.args.max_faces)
-                track_ms = (time.perf_counter() - track_t0) * 1000.0
-
-                live_ids = {track.track_id for track in tracks}
-                self._track_states = {
-                    track_id: state
-                    for track_id, state in self._track_states.items()
-                    if track_id in live_ids
-                }
-
-                overlay_faces: list[OverlayFace] = []
-                embed_ms_total = 0.0
-                refreshes = 0
-                reuses = 0
-                for track in tracks:
-                    state = self._track_states.get(track.track_id)
-                    match = state.match if state is not None else None
-                    if self._should_refresh_embedding(track, state):
-                        landmarks = track.kps
-                        if landmarks is None:
-                            overlay_faces.append(OverlayFace(track=track, match=match))
-                            continue
-                        emb, emb_ms = self.pipeline.embed_from_kps(frame_bgr, landmarks)
-                        embed_ms_total += emb_ms
-                        refreshes += 1
-                        match = self.gallery.match(emb, threshold=self.args.match_threshold)
-                        self._track_states[track.track_id] = TrackIdentityState(
-                            match=match,
-                            last_embed_frame=self._frame_counter,
-                            last_embed_box=np.asarray(track.box, dtype=np.float32),
-                        )
-                    elif match is not None:
-                        reuses += 1
-                    overlay_faces.append(OverlayFace(track=track, match=match))
-
-                fresh_tracks = sum(1 for face in overlay_faces if face.track.matched)
-                recognized_faces = sum(
-                    1
-                    for face in overlay_faces
-                    if face.match is not None and face.match.matched and face.match.name is not None
-                )
-                annotate_in_place(
-                    frame_bgr,
-                    TrackingOverlay(
-                        faces=overlay_faces,
-                        detect_ms=detect_ms,
-                        track_ms=track_ms,
-                        embed_ms_total=embed_ms_total,
-                        gallery_size=self.gallery.count(),
-                    ),
-                )
+                frame_result = self._runtime.process_frame(frame_bgr)
+                annotate_in_place(frame_bgr, frame_result.overlay)
                 ok, encoded = cv2.imencode(
                     ".jpg",
                     frame_bgr,
@@ -569,6 +260,7 @@ class CameraStreamer:
                 )
                 if not ok:
                     raise RuntimeError("OpenCV failed to encode a JPEG frame")
+
                 self._frames_processed += 1
                 frame_memory = get_memory_stats()
                 if self._frames_processed % 25 == 0:
@@ -577,27 +269,15 @@ class CameraStreamer:
                     )
                 self._memory = frame_memory
                 loop_ms = (time.perf_counter() - loop_t0) * 1000.0
-                self._metrics.record_frame(
+                self._runtime.record_frame_metrics(
+                    frame_result=frame_result,
                     loop_ms=loop_ms,
-                    detect_ms=detect_ms,
-                    track_ms=track_ms,
-                    embed_ms=embed_ms_total,
-                    face_count=len(overlay_faces),
-                    fresh_tracks=fresh_tracks,
-                    recognized_faces=recognized_faces,
-                    refreshes=refreshes,
-                    reuses=reuses,
-                    gallery_size=self.gallery.count(),
                     memory=frame_memory,
                 )
                 self._publish(encoded.tobytes())
             except Exception as exc:  # pragma: no cover - runtime hardware path
                 self._memory = get_memory_stats()
-                self._metrics.record_error(
-                    str(exc),
-                    memory=self._memory,
-                    gallery_size=self.gallery.count(),
-                )
+                self._runtime.record_error(str(exc), memory=self._memory)
                 self._publish(None, error=str(exc))
                 break
 
@@ -623,7 +303,6 @@ class LiveCameraHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
     streamer: CameraStreamer
-    gallery: GalleryStore
 
 
 class LiveCameraHandler(BaseHTTPRequestHandler):
@@ -652,8 +331,8 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         return self.server.streamer  # type: ignore[attr-defined]
 
     @property
-    def gallery(self) -> GalleryStore:
-        return self.server.gallery  # type: ignore[attr-defined]
+    def runtime(self) -> LiveRuntime:
+        return self.streamer.runtime
 
     def _serve_index(self) -> None:
         body = HTML_PAGE.encode("utf-8")
@@ -692,7 +371,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
                 break
 
     def _serve_metrics_json(self) -> None:
-        body = json.dumps(self.streamer.metrics_snapshot, indent=2, sort_keys=True).encode("utf-8")
+        body = json.dumps(self.runtime.metrics_snapshot, indent=2, sort_keys=True).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -703,7 +382,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
     def _handle_enroll(self) -> None:
         try:
             name, uploads = self._parse_enroll_request()
-            result = self.gallery.enroll(name, uploads, self.streamer.pipeline)
+            result = self.runtime.enroll(name, uploads)
         except ValueError as exc:
             self._serve_message_page(HTTPStatus.BAD_REQUEST, "Enrollment failed", str(exc))
             return
@@ -778,90 +457,6 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         return
 
 
-def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
-    fresh_tracks = 0
-    recognized_faces = 0
-    for face in overlay.faces:
-        track = face.track
-        box = track.box
-        x1, y1, x2, y2, score = box
-        color = (0, 255, 0) if track.matched else (0, 191, 255)
-        if track.matched:
-            fresh_tracks += 1
-        if face.match is not None and face.match.matched:
-            color = (64, 224, 208)
-            recognized_faces += 1
-        cv2.rectangle(
-            frame_bgr,
-            (int(x1), int(y1)),
-            (int(x2), int(y2)),
-            color=color,
-            thickness=2,
-        )
-        label = f"id={track.track_id} {score:.2f}"
-        if not track.matched:
-            label = f"{label} hold"
-        elif face.match is not None and face.match.matched and face.match.name is not None:
-            label = f"{label} {face.match.name} {face.match.score:.2f}"
-        cv2.putText(
-            frame_bgr,
-            label,
-            (int(x1), max(16, int(y1) - 6)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            1,
-        )
-        if track.kps is None:
-            continue
-        for point in track.kps:
-            cv2.circle(frame_bgr, (int(point[0]), int(point[1])), 2, (0, 0, 255), -1)
-
-    status = (
-        f"tracks={len(overlay.faces)} "
-        f"fresh={fresh_tracks} "
-        f"known={recognized_faces}/{overlay.gallery_size} "
-        f"det={overlay.detect_ms:.1f}ms "
-        f"track={overlay.track_ms:.1f}ms "
-        f"emb={overlay.embed_ms_total:.1f}ms"
-    )
-    cv2.putText(
-        frame_bgr,
-        status,
-        (10, 24),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (255, 255, 255),
-        2,
-    )
-    cv2.putText(
-        frame_bgr,
-        status,
-        (10, 24),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 0, 0),
-        1,
-    )
-
-
-def _box_iou(box_a: Float32Array, box_b: Float32Array) -> float:
-    x1 = max(float(box_a[0]), float(box_b[0]))
-    y1 = max(float(box_a[1]), float(box_b[1]))
-    x2 = min(float(box_a[2]), float(box_b[2]))
-    y2 = min(float(box_a[3]), float(box_b[3]))
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-
-    inter = (x2 - x1) * (y2 - y1)
-    area_a = max(0.0, float(box_a[2] - box_a[0])) * max(0.0, float(box_a[3] - box_a[1]))
-    area_b = max(0.0, float(box_b[2] - box_b[0])) * max(0.0, float(box_b[3] - box_b[1]))
-    union = area_a + area_b - inter
-    if union <= 0.0:
-        return 0.0
-    return inter / union
-
-
 def build_pipeline(args: argparse.Namespace) -> FacePipeline:
     det_model = ROOT / args.det_model
     rec_model = ROOT / args.rec_model
@@ -876,6 +471,24 @@ def build_pipeline(args: argparse.Namespace) -> FacePipeline:
         det_size=parse_size(args.det_size),
         max_faces=args.max_faces,
     )
+
+
+def build_runtime(args: argparse.Namespace, pipeline: FacePipeline) -> LiveRuntime:
+    gallery = GalleryStore(ROOT / args.gallery_dir)
+    metrics_json_path = ROOT / args.metrics_json if args.metrics_json else None
+    config = LiveRuntimeConfig(
+        max_faces=args.max_faces,
+        track_iou_thresh=args.track_iou_thresh,
+        track_max_missed=args.track_max_missed,
+        track_smoothing=args.track_smoothing,
+        match_threshold=args.match_threshold,
+        embed_refresh_frames=args.embed_refresh_frames,
+        embed_refresh_iou=args.embed_refresh_iou,
+        disable_embed_refresh=args.disable_embed_refresh,
+        metrics_json_path=metrics_json_path,
+        metrics_write_every=args.metrics_write_every,
+    )
+    return LiveRuntime(pipeline=pipeline, gallery=gallery, config=config)
 
 
 def parse_args() -> argparse.Namespace:
@@ -967,12 +580,11 @@ def parse_size(value: str) -> tuple[int, int]:
 
 def main() -> int:
     args = parse_args()
-    metrics_json_path = ROOT / args.metrics_json if args.metrics_json else None
 
     try:
         enforce_memory_cap(args.ram_cap_mb, "live camera startup")
         pipeline = build_pipeline(args)
-        gallery = GalleryStore(ROOT / args.gallery_dir)
+        runtime = build_runtime(args, pipeline)
     except FileNotFoundError as exc:
         print(exc)
         return 2
@@ -980,7 +592,7 @@ def main() -> int:
         print(exc)
         return 4
 
-    streamer = CameraStreamer(args, pipeline, gallery, metrics_json_path)
+    streamer = CameraStreamer(args, runtime)
     try:
         streamer.start()
     except RuntimeError as exc:
@@ -994,7 +606,6 @@ def main() -> int:
     try:
         server = LiveCameraHTTPServer((args.host, args.port), LiveCameraHandler)
         server.streamer = streamer
-        server.gallery = gallery
         print(f"Serving MJPEG on http://{args.host}:{args.port}/")
         server.serve_forever(poll_interval=0.5)
     except OSError as exc:

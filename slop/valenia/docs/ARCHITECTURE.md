@@ -13,7 +13,8 @@ This project stays intentionally small and modular to follow `KISS` + `YAGNI` wh
 
 3. Prefer composition over framework complexity:
 - `FacePipeline` composes detector + embedder.
-- Scripts orchestrate workflows (benchmark, dataset validation).
+- `LiveRuntime` owns stateful live tracking, matching, and metrics.
+- Scripts orchestrate workflows (benchmark, dataset validation, HTTP serving).
 
 4. Separate concerns:
 - `src/`: reusable pipeline logic.
@@ -31,7 +32,8 @@ This project stays intentionally small and modular to follow `KISS` + `YAGNI` wh
   - Keep `ArcFaceEmbedder.get_embedding(...)` contract stable.
 
 - Add tracker / identity memory:
-  - Add stage between detection and embedding in scripts (or a dedicated module).
+  - Extend `LiveRuntime` for stateful live behavior.
+  - Keep `live_camera_server.py` focused on camera + HTTP transport.
   - Keep validation script unchanged for regression tracking.
 
 ## What We Explicitly Avoid (for now)
