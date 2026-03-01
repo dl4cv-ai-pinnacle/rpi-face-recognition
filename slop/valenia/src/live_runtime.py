@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 from contracts import GalleryLike, PipelineLike
 from gallery import EnrollmentResult, GalleryMatch, IdentityRecord, UnknownRecord
+from quality import compute_face_quality
 from runtime_utils import (
     CpuUsageSampler,
     Float32Array,
@@ -36,6 +37,10 @@ class LiveRuntimeConfig:
     disable_embed_refresh: bool
     metrics_json_path: Path | None
     metrics_write_every: int
+    enrich_margin: float = 0.10
+    enrich_min_quality: float = 0.40
+    enrich_cooldown_seconds: float = 30.0
+    enrich_max_samples: int = 48
 
 
 @dataclass(frozen=True)
@@ -386,6 +391,7 @@ class LiveRuntime:
         )
         self._last_tracks: list[Track] = []
         self._track_states: dict[int, TrackIdentityState] = {}
+        self._last_enrich_time: dict[str, float] = {}
         self._metrics = LiveMetricsCollector(
             metrics_json_path=config.metrics_json_path,
             write_every_frames=config.metrics_write_every,
@@ -407,17 +413,32 @@ class LiveRuntime:
     def list_unknowns(self) -> list[UnknownRecord]:
         return self.gallery.unknowns()
 
+    def upload_to_identity(self, slug: str, uploads: list[tuple[str, bytes]]) -> EnrollmentResult:
+        return self.gallery.upload_to_identity(slug, uploads, self.pipeline)
+
     def rename_identity(self, slug: str, new_name: str) -> IdentityRecord:
         return self.gallery.rename_identity(slug, new_name)
 
     def promote_unknown(self, unknown_slug: str, name: str) -> EnrollmentResult:
         return self.gallery.promote_unknown(unknown_slug, name)
 
+    def merge_unknowns(self, target_slug: str, source_slug: str) -> UnknownRecord:
+        return self.gallery.merge_unknowns(target_slug, source_slug)
+
     def delete_unknown(self, unknown_slug: str) -> None:
         self.gallery.delete_unknown(unknown_slug)
 
     def read_gallery_image(self, kind: str, slug: str, filename: str) -> tuple[bytes, str]:
         return self.gallery.read_image(kind, slug, filename)
+
+    def list_identity_images(self, slug: str) -> list[str]:
+        return self.gallery.list_identity_images(slug)
+
+    def delete_identity(self, slug: str) -> None:
+        self.gallery.delete_identity(slug)
+
+    def delete_identity_sample(self, slug: str, filename: str) -> IdentityRecord:
+        return self.gallery.delete_identity_sample(slug, filename)
 
     def process_frame(self, frame_bgr: UInt8Array) -> LiveRuntimeFrameResult:
         self._frame_counter += 1
@@ -476,6 +497,7 @@ class LiveRuntime:
                         last_embed_frame=self._frame_counter,
                         last_embed_box=current_box,
                     )
+                    self._try_enrich(new_match, emb, track.box, frame_bgr)
             elif match is not None:
                 reuses += 1
             overlay_faces.append(OverlayFace(track=track, match=match))
@@ -512,6 +534,37 @@ class LiveRuntime:
 
     def record_error(self, error: str, *, memory: MemoryStats) -> None:
         self._metrics.record_error(error, memory=memory, gallery_size=self.gallery.count())
+
+    def _try_enrich(
+        self,
+        match: GalleryMatch,
+        embedding: Float32Array,
+        box: Float32Array,
+        frame_bgr: UInt8Array,
+    ) -> None:
+        """Attempt to enrich a matched identity with a new embedding sample."""
+        if match.slug is None:
+            return
+        margin = match.score - self.config.match_threshold
+        if margin < self.config.enrich_margin:
+            return
+        q = compute_face_quality(box)
+        if q.score < self.config.enrich_min_quality:
+            return
+        now = time.perf_counter()
+        last = self._last_enrich_time.get(match.slug, 0.0)
+        if (now - last) < self.config.enrich_cooldown_seconds:
+            return
+        crop = _crop_face_region(frame_bgr, box)
+        added = self.gallery.enrich_identity(
+            match.slug,
+            embedding,
+            q.score,
+            max_samples=self.config.enrich_max_samples,
+            crop_bgr=crop,
+        )
+        if added:
+            self._last_enrich_time[match.slug] = now
 
     def _should_refresh_embedding(
         self,

@@ -75,13 +75,16 @@ class StubGallery:
         match_name: str | None = "alice",
         match_slug: str | None = "alice",
         matched: bool = True,
+        match_score: float = 0.99,
     ) -> None:
         self._count_value = count_value
         self._match_name = match_name
         self._match_slug = match_slug
         self._matched = matched
+        self._match_score = match_score
         self.match_calls = 0
         self.capture_unknown_calls = 0
+        self.enrich_calls = 0
 
     def enroll(
         self,
@@ -104,9 +107,24 @@ class StubGallery:
         return GalleryMatch(
             name=self._match_name,
             slug=self._match_slug,
-            score=0.99,
+            score=self._match_score,
             matched=self._matched,
         )
+
+    def enrich_identity(
+        self,
+        slug: str,
+        embedding: Float32Array,
+        quality: float,
+        /,
+        *,
+        max_samples: int = 48,
+        diversity_threshold: float = 0.95,
+        crop_bgr: UInt8Array | None = None,
+    ) -> bool:
+        del slug, embedding, quality, max_samples, diversity_threshold, crop_bgr
+        self.enrich_calls += 1
+        return True
 
     def capture_unknown(self, embedding: Float32Array, crop_bgr: UInt8Array) -> GalleryMatch:
         del embedding, crop_bgr
@@ -121,6 +139,21 @@ class StubGallery:
 
     def unknowns(self) -> list[UnknownRecord]:
         return []
+
+    def upload_to_identity(
+        self,
+        slug: str,
+        uploads: list[tuple[str, bytes]],
+        pipeline: object,
+    ) -> EnrollmentResult:
+        del uploads, pipeline
+        return EnrollmentResult(
+            name=slug,
+            slug=slug,
+            accepted_files=("face.jpg",),
+            rejected_files=(),
+            sample_count=2,
+        )
 
     def rename_identity(self, slug: str, new_name: str) -> IdentityRecord:
         del new_name
@@ -142,12 +175,41 @@ class StubGallery:
             sample_count=1,
         )
 
+    def merge_unknowns(self, target_slug: str, source_slug: str) -> UnknownRecord:
+        del source_slug
+        return UnknownRecord(
+            slug=target_slug,
+            display_name=target_slug,
+            template=np.zeros((3,), dtype=np.float32),
+            sample_count=2,
+            first_seen_epoch=0.0,
+            last_seen_epoch=0.0,
+            preview_filename=None,
+        )
+
     def delete_unknown(self, unknown_slug: str) -> None:
         del unknown_slug
 
     def read_image(self, kind: str, slug: str, filename: str) -> tuple[bytes, str]:
         del kind, slug, filename
         return b"123", "image/jpeg"
+
+    def list_identity_images(self, slug: str) -> list[str]:
+        del slug
+        return []
+
+    def delete_identity(self, slug: str) -> None:
+        del slug
+
+    def delete_identity_sample(self, slug: str, filename: str) -> IdentityRecord:
+        del filename
+        return IdentityRecord(
+            name=slug,
+            slug=slug,
+            template=np.zeros((3,), dtype=np.float32),
+            sample_count=1,
+            preview_filename=None,
+        )
 
 
 class SequenceGallery(StubGallery):
@@ -169,6 +231,9 @@ def build_runtime(
     det_every: int = 1,
     disable_embed_refresh: bool = False,
     embed_refresh_frames: int = 5,
+    enrich_min_quality: float = 0.0,
+    enrich_cooldown_seconds: float = 0.0,
+    enrich_margin: float = 0.10,
 ) -> LiveRuntime:
     return LiveRuntime(
         pipeline=pipeline,
@@ -186,6 +251,9 @@ def build_runtime(
             disable_embed_refresh=disable_embed_refresh,
             metrics_json_path=None,
             metrics_write_every=10,
+            enrich_margin=enrich_margin,
+            enrich_min_quality=enrich_min_quality,
+            enrich_cooldown_seconds=enrich_cooldown_seconds,
         ),
     )
 
@@ -344,3 +412,35 @@ def test_live_runtime_enroll_delegates_to_gallery() -> None:
 
     assert result.name == "Alice"
     assert result.sample_count == 1
+
+
+def test_live_runtime_enriches_high_confidence_match() -> None:
+    pipeline = StubPipeline([make_detection()])
+    gallery = StubGallery(match_score=0.99)
+    runtime = build_runtime(
+        pipeline,
+        gallery,
+        enrich_min_quality=0.0,
+        enrich_cooldown_seconds=0.0,
+        enrich_margin=0.10,
+    )
+
+    runtime.process_frame(make_frame())
+
+    assert gallery.enrich_calls == 1
+
+
+def test_live_runtime_skips_enrichment_below_margin() -> None:
+    pipeline = StubPipeline([make_detection()])
+    gallery = StubGallery(match_score=0.25)
+    runtime = build_runtime(
+        pipeline,
+        gallery,
+        enrich_min_quality=0.0,
+        enrich_cooldown_seconds=0.0,
+        enrich_margin=0.10,
+    )
+
+    runtime.process_frame(make_frame())
+
+    assert gallery.enrich_calls == 0

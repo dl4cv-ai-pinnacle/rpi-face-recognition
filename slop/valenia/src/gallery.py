@@ -239,6 +239,63 @@ class GalleryStore:
             records = list(self._unknown_records.values())
         return sorted(records, key=lambda record: record.last_seen_epoch, reverse=True)
 
+    def upload_to_identity(
+        self,
+        slug: str,
+        uploads: list[tuple[str, bytes]],
+        pipeline: PipelineLike,
+    ) -> EnrollmentResult:
+        """Add uploaded photos to an existing identity."""
+        with self._lock:
+            record = self._records.get(slug)
+        if record is None:
+            raise ValueError(f"Unknown identity: {slug}")
+        if not uploads:
+            raise ValueError("At least one photo is required")
+
+        accepted_files: list[str] = []
+        rejected_files: list[str] = []
+        embeddings: list[Float32Array] = []
+        stored_uploads: list[tuple[str, bytes]] = []
+
+        for filename, payload in uploads:
+            label = filename or "upload"
+            if not payload:
+                rejected_files.append(f"{label}: empty file")
+                continue
+            frame_bgr = _decode_image(payload)
+            if frame_bgr is None:
+                rejected_files.append(f"{label}: unreadable image")
+                continue
+
+            det, _ = pipeline.detect(frame_bgr)
+            if det.kps is None or len(det.boxes) != 1:
+                rejected_files.append(f"{label}: expected exactly one face")
+                continue
+
+            emb, _ = pipeline.embed_from_kps(frame_bgr, det.kps[0])
+            embeddings.append(np.asarray(emb, dtype=np.float32))
+            stored_uploads.append((label, payload))
+            accepted_files.append(label)
+
+        if not embeddings:
+            raise ValueError("No usable photos. Each upload must contain exactly one clear face.")
+
+        result = self._upsert_identity(
+            name=record.name,
+            samples=np.asarray(np.stack(embeddings, axis=0), dtype=np.float32),
+            uploads=stored_uploads,
+            replace_existing=False,
+            target_slug=slug,
+        )
+        return EnrollmentResult(
+            name=result.name,
+            slug=result.slug,
+            accepted_files=tuple(accepted_files),
+            rejected_files=tuple(rejected_files),
+            sample_count=result.sample_count,
+        )
+
     def rename_identity(self, slug: str, new_name: str) -> IdentityRecord:
         clean_name = _normalize_name(new_name)
         if not clean_name:
@@ -296,11 +353,110 @@ class GalleryStore:
             sample_count=int(unknown_samples.shape[0]),
         )
 
+    def merge_unknowns(self, target_slug: str, source_slug: str) -> UnknownRecord:
+        """Merge source unknown into target unknown, combining samples and captures."""
+        if target_slug == source_slug:
+            raise ValueError("Cannot merge an unknown into itself")
+        with self._lock:
+            target_record = self._unknown_records.get(target_slug)
+            source_record = self._unknown_records.get(source_slug)
+        if target_record is None:
+            raise ValueError(f"Unknown review item: {target_slug}")
+        if source_record is None:
+            raise ValueError(f"Unknown review item: {source_slug}")
+
+        target_dir = self._unknown_dir(target_slug)
+        source_dir = self._unknown_dir(source_slug)
+
+        target_samples = self._load_samples(target_dir / "samples.npy")
+        source_samples = self._load_samples(source_dir / "samples.npy")
+        if target_samples.size == 0:
+            target_samples = np.asarray(
+                np.expand_dims(target_record.template, axis=0), dtype=np.float32
+            )
+        if source_samples.size == 0:
+            source_samples = np.asarray(
+                np.expand_dims(source_record.template, axis=0), dtype=np.float32
+            )
+        combined_samples = np.asarray(np.vstack([target_samples, source_samples]), dtype=np.float32)
+
+        first_seen = min(target_record.first_seen_epoch, source_record.first_seen_epoch)
+        last_seen = max(target_record.last_seen_epoch, source_record.last_seen_epoch)
+
+        source_captures = self._load_uploads(source_dir, prefix="capture_")
+
+        record = self._write_unknown_record(
+            slug=target_slug,
+            samples=combined_samples,
+            crop_bgr=None,
+            first_seen_epoch=first_seen,
+            last_seen_epoch=last_seen,
+        )
+
+        existing_count = len(list(target_dir.glob("capture_*")))
+        for idx, (filename, payload) in enumerate(source_captures, start=existing_count + 1):
+            suffix = _safe_suffix(filename)
+            (target_dir / f"capture_{idx:03d}{suffix}").write_bytes(payload)
+
+        record = self._load_unknown_record(target_dir)
+        if record is None:
+            raise RuntimeError(f"Failed to reload merged unknown: {target_slug}")
+        with self._lock:
+            self._unknown_records[target_slug] = record
+
+        self.delete_unknown(source_slug)
+        return record
+
     def delete_unknown(self, unknown_slug: str) -> None:
         unknown_dir = self._unknown_dir(unknown_slug)
         with self._lock:
             self._unknown_records.pop(unknown_slug, None)
         _remove_dir_tree(unknown_dir)
+
+    def list_identity_images(self, slug: str) -> list[str]:
+        identity_dir = self._identity_dir(slug)
+        if not identity_dir.exists():
+            return []
+        return sorted(path.name for path in identity_dir.glob("upload_*") if path.is_file())
+
+    def delete_identity(self, slug: str) -> None:
+        with self._lock:
+            if slug not in self._records:
+                raise ValueError(f"Unknown identity: {slug}")
+            self._records.pop(slug)
+        _remove_dir_tree(self._identity_dir(slug))
+
+    def delete_identity_sample(self, slug: str, filename: str) -> IdentityRecord:
+        with self._lock:
+            record = self._records.get(slug)
+        if record is None:
+            raise ValueError(f"Unknown identity: {slug}")
+
+        identity_dir = self._identity_dir(slug)
+        upload_files = sorted(path.name for path in identity_dir.glob("upload_*") if path.is_file())
+        if filename not in upload_files:
+            raise ValueError(f"Sample not found: {filename}")
+        if len(upload_files) <= 1:
+            raise ValueError("Cannot delete last sample — delete the identity instead")
+
+        sample_idx = upload_files.index(filename)
+        samples = self._load_samples(identity_dir / "samples.npy")
+        qualities = self._load_sample_qualities(identity_dir, sample_count=int(samples.shape[0]))
+
+        (identity_dir / filename).unlink()
+
+        if samples.size > 0 and sample_idx < samples.shape[0]:
+            samples = np.asarray(np.delete(samples, sample_idx, axis=0), dtype=np.float32)
+            del qualities[sample_idx]
+
+        remaining_uploads = self._load_uploads(identity_dir, prefix="upload_")
+        return self._write_identity_record(
+            name=record.name,
+            slug=slug,
+            samples=samples,
+            uploads=remaining_uploads,
+            qualities=qualities if any(q != 1.0 for q in qualities) else None,
+        )
 
     def read_image(self, kind: str, slug: str, filename: str) -> tuple[bytes, str]:
         if not filename or Path(filename).name != filename:
@@ -399,6 +555,71 @@ class GalleryStore:
             preview_filename=preview_filename,
         )
 
+    def enrich_identity(
+        self,
+        slug: str,
+        embedding: Float32Array,
+        quality: float,
+        /,
+        *,
+        max_samples: int = 48,
+        diversity_threshold: float = 0.95,
+        crop_bgr: UInt8Array | None = None,
+    ) -> bool:
+        """Add a new embedding sample to an existing identity if diverse enough."""
+        probe = _normalize_embedding(embedding)
+        with self._lock:
+            record = self._records.get(slug)
+        if record is None:
+            return False
+
+        identity_dir = self._identity_dir(slug)
+        samples = self._load_samples(identity_dir / "samples.npy")
+        if samples.size == 0:
+            samples = np.asarray(np.expand_dims(record.template, axis=0), dtype=np.float32)
+
+        if not _check_diversity(probe, samples, max_similarity=diversity_threshold):
+            return False
+
+        qualities = self._load_sample_qualities(identity_dir, sample_count=int(samples.shape[0]))
+        uploads = self._load_uploads(identity_dir, prefix="upload_")
+
+        if samples.shape[0] >= max_samples:
+            worst_idx = int(np.argmin(qualities))
+            samples = np.asarray(np.delete(samples, worst_idx, axis=0), dtype=np.float32)
+            del qualities[worst_idx]
+            if worst_idx < len(uploads):
+                del uploads[worst_idx]
+
+        samples = np.asarray(np.vstack([samples, probe[np.newaxis, :]]), dtype=np.float32)
+        qualities.append(quality)
+
+        if crop_bgr is not None:
+            ok, encoded = cv2.imencode(".jpg", crop_bgr)
+            if ok:
+                uploads.append(("enrichment.jpg", encoded.tobytes()))
+
+        self._write_identity_record(
+            name=record.name,
+            slug=slug,
+            samples=samples,
+            uploads=uploads,
+            qualities=qualities,
+        )
+        return True
+
+    def _load_sample_qualities(self, identity_dir: Path, *, sample_count: int) -> list[float]:
+        meta_path = identity_dir / "meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                raw = meta.get("sample_qualities")
+                if isinstance(raw, list) and len(raw) == sample_count:
+                    return [float(v) for v in raw]
+            except (OSError, ValueError, TypeError):
+                pass
+        return [1.0] * sample_count
+
     def _write_identity_record(
         self,
         *,
@@ -406,6 +627,7 @@ class GalleryStore:
         slug: str,
         samples: Float32Array,
         uploads: list[tuple[str, bytes]],
+        qualities: list[float] | None = None,
     ) -> IdentityRecord:
         identity_dir = self._identity_dir(slug)
         identity_dir.mkdir(parents=True, exist_ok=True)
@@ -413,14 +635,16 @@ class GalleryStore:
             stale_file.unlink(missing_ok=True)
 
         normalized_samples = np.asarray(samples, dtype=np.float32)
-        template = _template_from_samples(normalized_samples)
+        template = _template_from_samples(normalized_samples, qualities)
         np.save(identity_dir / "template.npy", template, allow_pickle=False)
         np.save(identity_dir / "samples.npy", normalized_samples, allow_pickle=False)
-        meta = {
+        meta: dict[str, object] = {
             "name": name,
             "slug": slug,
             "sample_count": int(normalized_samples.shape[0]),
         }
+        if qualities is not None:
+            meta["sample_qualities"] = qualities
         (identity_dir / "meta.json").write_text(
             json.dumps(meta, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -572,12 +796,38 @@ def _normalize_embedding(embedding: Float32Array) -> Float32Array:
     return np.asarray(vector / norm, dtype=np.float32)
 
 
-def _template_from_samples(samples: Float32Array) -> Float32Array:
+def _template_from_samples(
+    samples: Float32Array,
+    qualities: list[float] | None = None,
+) -> Float32Array:
     matrix = np.asarray(samples, dtype=np.float32)
     if matrix.ndim == 1:
         matrix = np.asarray(np.expand_dims(matrix, axis=0), dtype=np.float32)
+    if qualities is not None and len(qualities) == matrix.shape[0]:
+        weights = np.asarray(qualities, dtype=np.float32)
+        weight_sum = float(np.sum(weights))
+        if weight_sum > 0.0:
+            template = np.asarray(
+                np.sum(matrix * weights[:, np.newaxis] / weight_sum, axis=0),
+                dtype=np.float32,
+            )
+            return _normalize_embedding(template)
     template = np.asarray(np.mean(matrix, axis=0), dtype=np.float32)
     return _normalize_embedding(template)
+
+
+def _check_diversity(
+    probe: Float32Array,
+    existing_samples: Float32Array,
+    *,
+    max_similarity: float = 0.95,
+) -> bool:
+    """Return True if the probe is diverse enough (max cosine sim < threshold)."""
+    matrix = np.asarray(existing_samples, dtype=np.float32)
+    if matrix.ndim == 1:
+        matrix = np.asarray(np.expand_dims(matrix, axis=0), dtype=np.float32)
+    similarities = matrix @ np.asarray(probe, dtype=np.float32)
+    return bool(float(np.max(similarities)) < max_similarity)
 
 
 def _remove_dir_tree(path: Path) -> None:

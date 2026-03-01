@@ -108,6 +108,16 @@ class GalleryLike(Protocol):
         """Return pending unknown captures."""
         ...
 
+    def upload_to_identity(
+        self,
+        slug: str,
+        uploads: list[tuple[str, bytes]],
+        pipeline: PipelineLike,
+        /,
+    ) -> EnrollmentResult:
+        """Add uploaded photos to an existing identity."""
+        ...
+
     def rename_identity(self, slug: str, new_name: str, /) -> IdentityRecord:
         """Update the display name for an existing identity."""
         ...
@@ -116,12 +126,42 @@ class GalleryLike(Protocol):
         """Promote a pending unknown into the confirmed gallery."""
         ...
 
+    def merge_unknowns(self, target_slug: str, source_slug: str, /) -> UnknownRecord:
+        """Merge source unknown into target unknown."""
+        ...
+
     def delete_unknown(self, unknown_slug: str, /) -> None:
         """Delete a pending unknown review item."""
         ...
 
     def read_image(self, kind: str, slug: str, filename: str, /) -> tuple[bytes, str]:
         """Read a preview image for the review UI."""
+        ...
+
+    def list_identity_images(self, slug: str, /) -> list[str]:
+        """Return sorted list of upload filenames for an identity."""
+        ...
+
+    def delete_identity(self, slug: str, /) -> None:
+        """Delete a confirmed identity and all its data."""
+        ...
+
+    def delete_identity_sample(self, slug: str, filename: str, /) -> IdentityRecord:
+        """Delete a single sample from an identity. Raises if it's the last one."""
+        ...
+
+    def enrich_identity(
+        self,
+        slug: str,
+        embedding: Float32Array,
+        quality: float,
+        /,
+        *,
+        max_samples: int = 48,
+        diversity_threshold: float = 0.95,
+        crop_bgr: UInt8Array | None = None,
+    ) -> bool:
+        """Add a diverse, high-quality sample to an existing identity."""
         ...
 
 

@@ -22,6 +22,8 @@ if "cv2" not in sys.modules:
     cv2_stub.__dict__["rectangle"] = _noop
     cv2_stub.__dict__["putText"] = _noop
     cv2_stub.__dict__["circle"] = _noop
-    cv2_stub.__dict__["imdecode"] = _noop
+    cv2_stub.__dict__["imdecode"] = lambda buf, flags: (
+        np.zeros((64, 64, 3), dtype=np.uint8) if len(buf) > 0 else None
+    )
     cv2_stub.__dict__["imencode"] = lambda ext, frame: (True, np.asarray([1, 2, 3], dtype=np.uint8))
     sys.modules["cv2"] = cv2_stub

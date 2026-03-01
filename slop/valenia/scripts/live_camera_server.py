@@ -966,6 +966,9 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         if parsed.path == "/gallery":
             self._serve_gallery()
             return
+        if parsed.path == "/gallery/identity":
+            self._serve_identity_detail(parsed.query)
+            return
         if parsed.path == "/gallery/image":
             self._serve_gallery_image(parsed.query)
             return
@@ -988,8 +991,20 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         if parsed.path == "/gallery/rename":
             self._handle_gallery_rename()
             return
+        if parsed.path == "/gallery/merge-unknowns":
+            self._handle_gallery_merge_unknowns()
+            return
         if parsed.path == "/gallery/delete-unknown":
             self._handle_gallery_delete_unknown()
+            return
+        if parsed.path == "/gallery/delete-identity":
+            self._handle_gallery_delete_identity()
+            return
+        if parsed.path == "/gallery/delete-sample":
+            self._handle_gallery_delete_sample()
+            return
+        if parsed.path == "/gallery/upload-samples":
+            self._handle_gallery_upload_samples()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -1115,6 +1130,24 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             return
         self._redirect("/gallery")
 
+    def _handle_gallery_merge_unknowns(self) -> None:
+        try:
+            fields = self._parse_form_fields()
+            target_slug = fields.get("target_slug", "")
+            source_slug = fields.get("source_slug", "")
+            self.runtime.merge_unknowns(target_slug, source_slug)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Merge failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Merge failed",
+                str(exc),
+            )
+            return
+        self._redirect("/gallery")
+
     def _handle_gallery_rename(self) -> None:
         try:
             fields = self._parse_form_fields()
@@ -1149,6 +1182,118 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             )
             return
         self._redirect("/gallery")
+
+    def _handle_gallery_delete_identity(self) -> None:
+        try:
+            fields = self._parse_form_fields()
+            slug = fields.get("slug", "")
+            self.runtime.delete_identity(slug)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Delete failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Delete failed",
+                str(exc),
+            )
+            return
+        self._redirect("/gallery")
+
+    def _handle_gallery_delete_sample(self) -> None:
+        try:
+            fields = self._parse_form_fields()
+            slug = fields.get("slug", "")
+            filename = fields.get("filename", "")
+            self.runtime.delete_identity_sample(slug, filename)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Delete failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Delete failed",
+                str(exc),
+            )
+            return
+        self._redirect(f"/gallery/identity?slug={quote(slug)}")
+
+    def _handle_gallery_upload_samples(self) -> None:
+        try:
+            slug, uploads = self._parse_upload_samples_request()
+            result = self.runtime.upload_to_identity(slug, uploads)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Upload failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Upload failed",
+                str(exc),
+            )
+            return
+        self._redirect(f"/gallery/identity?slug={quote(result.slug)}")
+
+    def _parse_upload_samples_request(self) -> tuple[str, list[tuple[str, bytes]]]:
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            raise ValueError("Expected multipart/form-data upload")
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length header") from exc
+        if content_length <= 0:
+            raise ValueError("Empty request body")
+
+        payload = self.rfile.read(content_length)
+        envelope = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + payload
+        message = BytesParser(policy=email_default_policy).parsebytes(envelope)
+        if not message.is_multipart():
+            raise ValueError("Expected multipart form fields")
+
+        slug = ""
+        uploads: list[tuple[str, bytes]] = []
+        for part in message.iter_parts():
+            if part.get_content_disposition() != "form-data":
+                continue
+            field_name = part.get_param("name", header="Content-Disposition")
+            if field_name is None:
+                continue
+            if field_name == "slug":
+                text_value = part.get_content()
+                if isinstance(text_value, str):
+                    slug = text_value.strip()
+                continue
+            if field_name == "photos":
+                body = part.get_payload(decode=True)
+                if not isinstance(body, bytes):
+                    continue
+                filename = part.get_filename() or "upload"
+                uploads.append((filename, body))
+
+        if not slug:
+            raise ValueError("Identity slug is required")
+        if not uploads:
+            raise ValueError("At least one photo is required")
+        return slug, uploads
+
+    def _serve_identity_detail(self, query_string: str) -> None:
+        params = parse_qs(query_string, keep_blank_values=False)
+        slug = params.get("slug", [""])[0]
+        identities = self.runtime.list_identities()
+        record = next((r for r in identities if r.slug == slug), None)
+        if record is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "Identity not found")
+            return
+        images = self.runtime.list_identity_images(slug)
+        body = _render_identity_detail_page(record, images).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _parse_enroll_request(self) -> tuple[str, list[tuple[str, bytes]]]:
         content_type = self.headers.get("Content-Type", "")
@@ -1246,6 +1391,7 @@ def build_pipeline(args: argparse.Namespace) -> PipelineLike:
 def build_runtime(args: argparse.Namespace, pipeline: PipelineLike) -> LiveRuntime:
     gallery = GalleryStore(resolve_project_path(ROOT, args.gallery_dir))
     metrics_json_path = resolve_project_path(ROOT, args.metrics_json) if args.metrics_json else None
+    enrich_margin = 999.0 if args.disable_enrich else args.enrich_margin
     config = LiveRuntimeConfig(
         max_faces=args.max_faces,
         target_fps=args.fps,
@@ -1259,6 +1405,10 @@ def build_runtime(args: argparse.Namespace, pipeline: PipelineLike) -> LiveRunti
         disable_embed_refresh=args.disable_embed_refresh,
         metrics_json_path=metrics_json_path,
         metrics_write_every=args.metrics_write_every,
+        enrich_margin=enrich_margin,
+        enrich_min_quality=args.enrich_min_quality,
+        enrich_cooldown_seconds=args.enrich_cooldown,
+        enrich_max_samples=args.enrich_max_samples,
     )
     return LiveRuntime(pipeline=pipeline, gallery=gallery, config=config)
 
@@ -1348,6 +1498,35 @@ def parse_args() -> argparse.Namespace:
         default=4096.0,
         help="Abort if current or peak RSS exceeds this limit; <=0 disables the check",
     )
+    parser.add_argument(
+        "--enrich-margin",
+        type=float,
+        default=0.10,
+        help="Match score must exceed match_threshold + margin for enrichment",
+    )
+    parser.add_argument(
+        "--enrich-min-quality",
+        type=float,
+        default=0.40,
+        help="Minimum face quality score for enrichment",
+    )
+    parser.add_argument(
+        "--enrich-cooldown",
+        type=float,
+        default=30.0,
+        help="Per-identity cooldown in seconds between enrichments",
+    )
+    parser.add_argument(
+        "--enrich-max-samples",
+        type=int,
+        default=48,
+        help="Maximum number of embedding samples per identity",
+    )
+    parser.add_argument(
+        "--disable-enrich",
+        action="store_true",
+        help="Disable auto-enrichment of identities during live recognition",
+    )
     return parser.parse_args()
 
 
@@ -1436,7 +1615,10 @@ def _render_gallery_page(
     unknowns: list[UnknownRecord],
 ) -> str:
     identity_cards = "\n".join(_render_identity_card(record) for record in identities)
-    unknown_cards = "\n".join(_render_unknown_card(record) for record in unknowns)
+    unknown_cards = "\n".join(
+        _render_unknown_card(record, unknowns=unknowns, identities=identities)
+        for record in unknowns
+    )
     if not identity_cards:
         identity_cards = '<p class="empty">No confirmed identities yet.</p>'
     if not unknown_cards:
@@ -1681,13 +1863,14 @@ def _render_gallery_page(
 def _render_identity_card(record: IdentityRecord) -> str:
     name = html.escape(record.name)
     slug = html.escape(record.slug)
+    detail_url = "/gallery/identity?slug=" + quote(record.slug)
     sample_count = record.sample_count
     preview = _render_preview_image("identity", record.slug, record.preview_filename)
     return f"""
 <div class=\"card\">
   {preview}
   <div>
-    <h3 class=\"card-name\">{name}</h3>
+    <h3 class=\"card-name\"><a href=\"{detail_url}\">{name}</a></h3>
     <p class=\"meta\">{slug} &middot; {sample_count} samples</p>
     <form action=\"/gallery/rename\" method=\"post\">
       <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
@@ -1696,16 +1879,82 @@ def _render_identity_card(record: IdentityRecord) -> str:
         <button type=\"submit\">Rename</button>
       </div>
     </form>
+    <form action=\"/gallery/delete-identity\" method=\"post\"
+          onsubmit=\"return confirm('Delete identity {name}?')\" style=\"margin-top:0\">
+      <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
+      <div class=\"button-row\">
+        <button class=\"delete\" type=\"submit\">Delete</button>
+      </div>
+    </form>
   </div>
 </div>
 """
 
 
-def _render_unknown_card(record: UnknownRecord) -> str:
+def _render_unknown_card(
+    record: UnknownRecord,
+    *,
+    unknowns: list[UnknownRecord],
+    identities: list[IdentityRecord],
+) -> str:
     slug_raw = record.slug
     slug = html.escape(slug_raw)
     sample_count = record.sample_count
     preview = _render_preview_image("unknown", slug_raw, record.preview_filename)
+
+    merge_options: list[str] = []
+    for other in unknowns:
+        if other.slug == slug_raw:
+            continue
+        other_slug = html.escape(other.slug)
+        cnt = other.sample_count
+        merge_options.append(
+            f'<option value="unknown:{other_slug}">{other_slug} ({cnt} captures)</option>'
+        )
+    for identity in identities:
+        id_name = html.escape(identity.name)
+        cnt = identity.sample_count
+        merge_options.append(
+            f'<option value="identity:{id_name}">{id_name} ({cnt} samples)</option>'
+        )
+
+    merge_form = ""
+    if merge_options:
+        options_html = "\n".join(merge_options)
+        form_id = f"merge-form-{slug}"
+        merge_form = f"""
+    <form id=\"{form_id}\" method=\"post\" style=\"margin-top:0\">
+      <input type=\"hidden\" name=\"source_slug\" value=\"{slug}\">
+      <select name=\"merge_target\" required style=\"width:100%;margin-bottom:4px\">
+        <option value=\"\" disabled selected>Merge into\u2026</option>
+        {options_html}
+      </select>
+      <div class=\"button-row\">
+        <button type=\"submit\">Merge</button>
+      </div>
+      <script>
+        document.getElementById("{form_id}").addEventListener("submit", function(e) {{
+          var sel = this.merge_target.value;
+          if (!sel) return e.preventDefault();
+          var parts = sel.split(":");
+          if (parts[0] === "identity") {{
+            this.action = "/gallery/promote";
+            var nameInput = document.createElement("input");
+            nameInput.type = "hidden"; nameInput.name = "name"; nameInput.value = parts[1];
+            this.appendChild(nameInput);
+            this.querySelector("[name=source_slug]").name = "unknown_slug";
+          }} else {{
+            this.action = "/gallery/merge-unknowns";
+            var targetInput = document.createElement("input");
+            targetInput.type = "hidden";
+            targetInput.name = "target_slug";
+            targetInput.value = parts[1];
+            this.appendChild(targetInput);
+          }}
+        }});
+      </script>
+    </form>"""
+
     return f"""
 <div class=\"card\">
   {preview}
@@ -1718,7 +1967,7 @@ def _render_unknown_card(record: UnknownRecord) -> str:
       <div class=\"button-row\">
         <button type=\"submit\">Promote</button>
         </div>
-    </form>
+    </form>{merge_form}
     <form action=\"/gallery/delete-unknown\" method=\"post\" style=\"margin-top:0\">
       <input type=\"hidden\" name=\"unknown_slug\" value=\"{slug}\">
       <div class=\"button-row\">
@@ -1727,6 +1976,207 @@ def _render_unknown_card(record: UnknownRecord) -> str:
     </form>
   </div>
 </div>
+"""
+
+
+def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> str:
+    name = html.escape(record.name)
+    slug = html.escape(record.slug)
+    sample_count = record.sample_count
+
+    image_cards: list[str] = []
+    for img in images:
+        safe_img = html.escape(img)
+        img_url = "/gallery/image?kind=identity&slug=" + quote(record.slug) + "&file=" + quote(img)
+        image_cards.append(f"""
+<div class=\"sample-card\">
+  <img class=\"sample-img\" src=\"{img_url}\" alt=\"{safe_img}\">
+  <form action=\"/gallery/delete-sample\" method=\"post\"
+        onsubmit=\"return confirm('Delete this sample?')\">
+    <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
+    <input type=\"hidden\" name=\"filename\" value=\"{safe_img}\">
+    <button class=\"delete\" type=\"submit\">Delete</button>
+  </form>
+</div>""")
+
+    grid = "\n".join(image_cards) if image_cards else '<p class="empty">No sample images.</p>'
+
+    return f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>{name} — Valenia Gallery</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #000;
+      --border: #333;
+      --text: #eee;
+      --muted: #999;
+      --danger: #e55;
+    }}
+    body {{
+      margin: 0;
+      font-family: \"IBM Plex Sans\", \"Segoe UI\", system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      min-height: 100vh;
+    }}
+    main {{
+      width: min(100%, 1380px);
+      margin: 0 auto;
+      padding: 1rem;
+      box-sizing: border-box;
+    }}
+    a {{
+      color: var(--text);
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
+    }}
+    a:hover {{
+      color: #fff;
+    }}
+    nav {{
+      display: flex;
+      align-items: baseline;
+      gap: 1.5rem;
+      padding: 0 0 1rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }}
+    nav strong {{
+      font-size: 1.1rem;
+      margin-right: auto;
+    }}
+    nav a {{
+      font-size: 0.9rem;
+      color: var(--muted);
+    }}
+    nav a:hover {{
+      color: var(--text);
+    }}
+    h1 {{
+      font-size: 1.2rem;
+      margin: 0 0 0.25rem;
+    }}
+    .meta {{
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin: 0 0 1rem;
+    }}
+    form {{
+      display: grid;
+      gap: 0.5rem;
+      margin-top: 0.4rem;
+    }}
+    input, button {{
+      font: inherit;
+    }}
+    input[type=\"text\"] {{
+      padding: 0.5rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: #111;
+      color: var(--text);
+    }}
+    .button-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }}
+    button {{
+      width: fit-content;
+      padding: 0.55rem 0.85rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--text);
+      color: #000;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    button.delete {{
+      background: transparent;
+      color: #fcc;
+      border-color: rgba(238, 85, 85, 0.3);
+    }}
+    .actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: end;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }}
+    .actions form {{
+      margin-top: 0;
+    }}
+    .sample-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.75rem;
+    }}
+    .sample-card {{
+      display: grid;
+      gap: 0.3rem;
+    }}
+    .sample-img {{
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border-radius: 4px;
+      background: #111;
+    }}
+    .sample-card form {{
+      margin-top: 0;
+    }}
+    .empty {{
+      color: var(--muted);
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <nav>
+      <strong>Valenia</strong>
+      <a href=\"/gallery\">Gallery</a>
+      <a href=\"/\">Live Feed</a>
+    </nav>
+    <h1>{name}</h1>
+    <p class=\"meta\">{slug} &middot; {sample_count} samples</p>
+    <div class=\"actions\">
+      <form action=\"/gallery/rename\" method=\"post\"
+            style=\"display:flex;gap:0.5rem;align-items:end\">
+        <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
+        <input type=\"text\" name=\"name\" value=\"{name}\" required placeholder=\"New name\">
+        <button type=\"submit\">Rename</button>
+      </form>
+      <form action=\"/gallery/delete-identity\" method=\"post\"
+            onsubmit=\"return confirm('Delete identity {name} and all samples?')\">
+        <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
+        <button class=\"delete\" type=\"submit\">Delete Identity</button>
+      </form>
+    </div>
+    <div class=\"actions\">
+      <form action=\"/gallery/upload-samples\" method=\"post\" enctype=\"multipart/form-data\"
+            style=\"display:flex;gap:0.5rem;align-items:end;flex-wrap:wrap\">
+        <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
+        <input type=\"file\" name=\"photos\" accept=\"image/*\" multiple required
+               style=\"font-size:0.85rem;color:var(--muted)\">
+        <button type=\"submit\">Upload Photos</button>
+      </form>
+    </div>
+    <h2 style=\"font-size:0.85rem;text-transform:uppercase;
+      letter-spacing:0.06em;color:var(--muted);
+      font-weight:600;margin:0 0 0.75rem\">Samples</h2>
+    <div class=\"sample-grid\">
+      {grid}
+    </div>
+  </main>
+</body>
+</html>
 """
 
 
