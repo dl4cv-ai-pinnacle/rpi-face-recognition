@@ -67,12 +67,12 @@ existing unit file, so local edits to the service file are preserved.
 
 - `/` returns a two-column dashboard:
   - live camera feed on the left
-  - live metrics and enrollment controls on the right
-- `/` shows FPS, CPU load, load average, current/peak RSS, SoC temperature,
-  detector cadence, per-frame timings, and whether the runtime is CPU-only.
+  - live metrics on the right (FPS, CPU, temp, pipeline timings)
+- Metric labels include browser tooltips explaining what each value means.
 - `/` labels faces with `track=<n>`, where the number is a session-local tracker
   ID, not a person identity ID.
 - `/gallery` shows confirmed identities plus an unknown-review inbox.
+- `/gallery` includes the enrollment form for uploading new identity photos.
 - `/gallery` lets you rename confirmed identities, promote `unknown-xxxx`
   entries to named identities, or discard them.
 - `/stream.mjpg` returns an MJPEG stream (`multipart/x-mixed-replace`).
@@ -102,7 +102,10 @@ Use `--metrics-json ""` to disable writing the rolling metrics file.
 ## Notes
 
 - The capture loop keeps only the latest encoded JPEG in memory, so clients do not build up frame queues.
-- Frames are annotated with stable track IDs, smoothed boxes/landmarks, match labels, and per-frame timings.
+- Frames are annotated with cleaner labels only:
+  - confirmed names for matched identities
+  - `unknown-xxxx` review labels for auto-captured unknowns
+- The stream no longer overlays the noisy per-frame status banner at the top.
 - Track IDs are monotonic within the current server session. Unknown people still
   get track IDs so the tracker can follow them even before they match the gallery.
 - Unknown faces are auto-captured into `slop/valenia/data/gallery/_unknowns/`.

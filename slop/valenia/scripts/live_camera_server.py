@@ -39,56 +39,57 @@ HTML_PAGE = """<!doctype html>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0b1217;
-      --panel: #142028;
-      --panel-2: #1c2c36;
-      --border: #2f4654;
-      --text: #ecf4f3;
-      --muted: #97adb7;
-      --accent: #83d483;
-      --accent-2: #54c6eb;
-      --warn: #f5b85f;
-      --danger: #ef6f6c;
+      --bg: #000;
+      --panel: #111;
+      --border: #333;
+      --text: #eee;
+      --muted: #999;
+      --danger: #e55;
     }
     body {
       margin: 0;
-      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-      background:
-        radial-gradient(circle at top right, rgba(84, 198, 235, 0.14), transparent 32%),
-        radial-gradient(circle at top left, rgba(131, 212, 131, 0.10), transparent 28%),
-        var(--bg);
+      font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
       color: var(--text);
       min-height: 100vh;
     }
     main {
       width: min(100%, 1440px);
-      padding: 1rem 1rem 1.25rem;
+      padding: 1rem;
       box-sizing: border-box;
       margin: 0 auto;
     }
-    .header {
+    a {
+      color: var(--text);
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
+    }
+    a:hover {
+      color: #fff;
+    }
+    nav {
+      display: flex;
+      align-items: baseline;
+      gap: 1.5rem;
+      padding: 0 0 1rem;
+      border-bottom: 1px solid var(--border);
       margin-bottom: 1rem;
-      padding: 1rem 1.1rem;
-      border: 1px solid var(--border);
-      border-radius: 0.9rem;
-      background: linear-gradient(145deg, rgba(28, 44, 54, 0.95), rgba(20, 32, 40, 0.92));
+      flex-wrap: wrap;
     }
-    h1 {
-      margin: 0 0 0.35rem;
-      font-size: clamp(1.45rem, 2.2vw, 2rem);
+    nav strong {
+      font-size: 1.1rem;
+      margin-right: auto;
     }
-    .header p,
-    .subtle {
-      margin: 0 0 1rem;
+    nav a {
+      font-size: 0.9rem;
       color: var(--muted);
-      line-height: 1.45;
     }
-    .subtle:last-child {
-      margin-bottom: 0;
+    nav a:hover {
+      color: var(--text);
     }
     .layout {
       display: grid;
-      grid-template-columns: minmax(0, 1.8fr) minmax(320px, 0.95fr);
+      grid-template-columns: minmax(0, 1.8fr) minmax(300px, 0.95fr);
       gap: 1rem;
       align-items: start;
     }
@@ -96,152 +97,119 @@ HTML_PAGE = """<!doctype html>
       display: grid;
       gap: 1rem;
     }
-    .panel {
-      padding: 1rem;
-      border: 1px solid var(--border);
-      border-radius: 0.9rem;
-      background: linear-gradient(160deg, rgba(20, 32, 40, 0.96), rgba(15, 24, 30, 0.98));
-      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
-    }
-    .panel h2,
-    .panel h3 {
-      margin: 0 0 0.8rem;
-      font-size: 1rem;
-      letter-spacing: 0.01em;
-    }
-    .camera-shell {
-      overflow: hidden;
-    }
-    .camera-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 1rem;
-      margin-bottom: 0.75rem;
-    }
-    .endpoint-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-top: 0.45rem;
-    }
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      padding: 0.28rem 0.55rem;
-      border-radius: 999px;
-      border: 1px solid rgba(131, 212, 131, 0.25);
-      background: rgba(131, 212, 131, 0.08);
-      color: #cfead0;
-      font-size: 0.8rem;
+    h2, h3 {
+      margin: 0 0 0.75rem;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
       font-weight: 600;
     }
-    a.chip {
-      text-decoration: none;
+    .stream-wrap {
+      position: relative;
+      aspect-ratio: 4 / 3;
+      background: #111;
+      border-radius: 4px;
+      overflow: hidden;
     }
-    .camera-frame {
-      padding: 0.5rem;
-      border-radius: 0.9rem;
-      border: 1px solid rgba(84, 198, 235, 0.18);
-      background: radial-gradient(circle at top, rgba(84, 198, 235, 0.06), rgba(0, 0, 0, 0));
-    }
-    form {
-      display: grid;
-      gap: 0.75rem;
-    }
-    label {
-      display: grid;
-      gap: 0.35rem;
-      font-size: 0.95rem;
-    }
-    input,
-    button {
-      font: inherit;
-    }
-    input[type="text"],
-    input[type="file"] {
-      padding: 0.6rem;
-      border-radius: 0.55rem;
-      border: 1px solid var(--border);
-      background: #12212a;
-      color: var(--text);
-    }
-    button {
-      width: fit-content;
-      padding: 0.7rem 1rem;
-      border: 0;
-      border-radius: 0.55rem;
-      background: linear-gradient(135deg, var(--accent), #b7ec87);
-      color: #0b1710;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    img {
+    .stream-wrap img {
+      position: absolute;
+      inset: 0;
       width: 100%;
-      height: auto;
-      display: block;
-      border: 1px solid var(--border);
-      border-radius: 0.65rem;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 4px;
       background: #000;
+      opacity: 0;
+      transition: opacity 0.3s;
     }
-    code {
-      color: #d8f7ad;
+    .stream-wrap img.loaded {
+      opacity: 1;
+    }
+    .stream-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+      gap: 0.5rem;
+    }
+    .stream-loading.hidden {
+      display: none;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--muted);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
     }
     .metrics-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.65rem;
-      margin-bottom: 0.8rem;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
     }
     .metric-card {
       padding: 0.75rem;
-      border-radius: 0.75rem;
-      border: 1px solid rgba(47, 70, 84, 0.85);
-      background: linear-gradient(160deg, rgba(28, 44, 54, 0.75), rgba(13, 23, 29, 0.85));
+      border: 1px solid var(--border);
+      border-radius: 4px;
     }
     .metric-label {
       color: var(--muted);
-      font-size: 0.78rem;
+      font-size: 0.75rem;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.05em;
+    }
+    .metric-label[title],
+    .list-key[title] {
+      cursor: help;
+      text-decoration: underline dotted var(--border);
+      text-underline-offset: 0.18rem;
     }
     .metric-value {
-      margin-top: 0.25rem;
-      font-size: 1.35rem;
+      margin-top: 0.2rem;
+      font-size: 1.5rem;
       font-weight: 700;
+      font-variant-numeric: tabular-nums;
       line-height: 1.1;
     }
     .metric-detail {
-      margin-top: 0.25rem;
+      margin-top: 0.2rem;
       color: var(--muted);
-      font-size: 0.82rem;
-      min-height: 1.2em;
+      font-size: 0.8rem;
+      min-height: 1.1em;
     }
     .meter {
-      margin-top: 0.55rem;
-      height: 0.35rem;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.08);
+      margin-top: 0.45rem;
+      height: 3px;
+      border-radius: 2px;
+      background: var(--border);
       overflow: hidden;
     }
     .meter > span {
       display: block;
       height: 100%;
       border-radius: inherit;
-      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+      background: var(--text);
     }
     .list-grid {
       display: grid;
-      gap: 0.55rem;
+      gap: 0;
     }
     .list-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 0.75rem;
       align-items: center;
-      padding: 0.5rem 0;
-      border-bottom: 1px solid rgba(47, 70, 84, 0.45);
+      padding: 0.45rem 0;
+      border-bottom: 1px solid #1a1a1a;
     }
     .list-row:last-child {
       border-bottom: 0;
@@ -249,38 +217,59 @@ HTML_PAGE = """<!doctype html>
     }
     .list-key {
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
     }
     .list-value {
       text-align: right;
       font-weight: 600;
       font-variant-numeric: tabular-nums;
+      font-size: 0.9rem;
     }
     .status-line {
-      margin-top: 0.85rem;
-      padding: 0.7rem 0.8rem;
-      border-radius: 0.7rem;
-      border: 1px solid rgba(84, 198, 235, 0.18);
-      background: rgba(84, 198, 235, 0.06);
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       line-height: 1.45;
     }
     .status-line strong {
       color: var(--text);
     }
+    .section-sep {
+      margin: 1rem 0 0.75rem;
+      border-top: 1px solid var(--border);
+      padding-top: 0.75rem;
+    }
     .error-banner {
       display: none;
-      margin-bottom: 0.8rem;
-      padding: 0.75rem 0.85rem;
-      border-radius: 0.7rem;
-      border: 1px solid rgba(239, 111, 108, 0.3);
-      background: rgba(239, 111, 108, 0.08);
-      color: #ffd4d2;
-      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+      padding: 0.6rem 0.75rem;
+      border-radius: 4px;
+      border: 1px solid rgba(238, 85, 85, 0.3);
+      background: rgba(238, 85, 85, 0.08);
+      color: #fcc;
+      font-size: 0.85rem;
     }
     .error-banner.visible {
       display: block;
+    }
+    .disconnect-banner {
+      display: none;
+      padding: 0.6rem 0.75rem;
+      margin-bottom: 1rem;
+      border-radius: 4px;
+      border: 1px solid #555;
+      background: #1a1a1a;
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .disconnect-banner.visible {
+      display: block;
+    }
+    .stream-wrap.disconnected {
+      opacity: 0.4;
     }
     @media (max-width: 980px) {
       .layout {
@@ -291,77 +280,113 @@ HTML_PAGE = """<!doctype html>
       .metrics-grid {
         grid-template-columns: 1fr;
       }
-      .camera-head {
-        flex-direction: column;
-        align-items: stretch;
-      }
     }
   </style>
 </head>
 <body>
   <main>
-    <section class="header">
-      <h1>Valenia Live Camera</h1>
-      <p>
-        Live face tracking, recognition, and telemetry. The stream is on the left;
-        runtime metrics and enrollment stay pinned on the right.
-      </p>
-      <p class="subtle">Raw endpoints: <code>/stream.mjpg</code> and <code>/metrics.json</code></p>
-    </section>
+    <nav>
+      <strong>Valenia</strong>
+      <a href="/gallery">Gallery</a>
+      <a href="/stream.mjpg">Stream</a>
+      <a href="/metrics.json">Metrics JSON</a>
+    </nav>
+    <div id="disconnect-banner" class="disconnect-banner">
+      Server disconnected. The stream and metrics have stopped updating.
+    </div>
     <div class="layout">
-      <section class="panel camera-shell">
-        <div class="camera-head">
-          <div>
-            <h2>Camera Feed</h2>
-            <p class="subtle">Track IDs are session-local tracker IDs. They are not person IDs.</p>
-            <div class="endpoint-row">
-              <span class="chip">MJPEG: /stream.mjpg</span>
-              <span class="chip">Metrics: /metrics.json</span>
-              <a class="chip" href="/gallery">Review Gallery</a>
-            </div>
+      <section>
+        <h2>Live Feed</h2>
+        <div class="stream-wrap">
+          <div id="stream-loading" class="stream-loading">
+            <span class="spinner"></span> Connecting...
           </div>
-        </div>
-        <div class="camera-frame">
-          <img src="/stream.mjpg" alt="Live camera stream">
+          <img id="stream-img" src="/stream.mjpg" alt="Live camera stream">
         </div>
       </section>
       <aside class="stack">
-        <section class="panel">
-          <h2>Live Metrics</h2>
+        <section>
+          <h2>Metrics</h2>
           <div id="error-banner" class="error-banner"></div>
           <div id="hero-metrics" class="metrics-grid"></div>
-          <h3>System</h3>
+          <div class="section-sep">
+            <h3>System</h3>
+          </div>
           <div id="system-metrics" class="list-grid"></div>
-          <h3>Pipeline</h3>
+          <div class="section-sep">
+            <h3>Pipeline</h3>
+          </div>
           <div id="pipeline-metrics" class="list-grid"></div>
           <div id="runtime-status" class="status-line">Loading metrics...</div>
-        </section>
-        <section class="panel">
-          <h2>Enroll Identity</h2>
-          <p class="subtle">
-            Upload one or more clear face photos to create or update a gallery identity.
-          </p>
-          <form action="/enroll" method="post" enctype="multipart/form-data">
-            <label>
-              Name
-              <input type="text" name="name" required>
-            </label>
-            <label>
-              Photos
-              <input type="file" name="photos" accept="image/*" multiple required>
-            </label>
-            <button type="submit">Enroll Identity</button>
-          </form>
         </section>
       </aside>
     </div>
   </main>
   <script>
+    const streamImg = document.getElementById('stream-img');
+    const streamLoading = document.getElementById('stream-loading');
+    const streamWrap = streamImg.parentElement;
+    const disconnectBanner = document.getElementById('disconnect-banner');
     const heroMetrics = document.getElementById('hero-metrics');
     const systemMetrics = document.getElementById('system-metrics');
     const pipelineMetrics = document.getElementById('pipeline-metrics');
     const runtimeStatus = document.getElementById('runtime-status');
     const errorBanner = document.getElementById('error-banner');
+
+    let failCount = 0;
+    let disconnected = false;
+    let streamConnected = false;
+    let streamEpoch = 0;
+
+    // -- stream management --------------------------------------------------
+    // MJPEG over <img> is a long-lived connection. The browser will NOT
+    // reconnect it after the server restarts or the tab is backgrounded.
+    // We don't trust load/error events (unreliable for MJPEG across browsers).
+    // Instead we drive everything from the 1 Hz metrics poll + visibility API.
+
+    function connectStream() {
+      streamEpoch++;
+      streamConnected = false;
+      streamImg.classList.remove('loaded');
+      streamLoading.classList.remove('hidden');
+      streamLoading.innerHTML = '<span class="spinner"></span> Connecting...';
+      // Cache-bust forces the browser to open a fresh MJPEG connection.
+      streamImg.src = '/stream.mjpg?t=' + Date.now();
+    }
+
+    function checkStreamAlive() {
+      // Once the first MJPEG frame arrives, naturalWidth becomes > 0.
+      if (!streamConnected && streamImg.naturalWidth > 0) {
+        streamConnected = true;
+        streamImg.classList.add('loaded');
+        streamLoading.classList.add('hidden');
+      }
+    }
+
+    function setDisconnected(yes) {
+      if (disconnected === yes) { return; }
+      disconnected = yes;
+      disconnectBanner.classList.toggle('visible', yes);
+      streamWrap.classList.toggle('disconnected', yes);
+      if (yes) {
+        streamLoading.innerHTML = 'Stream stopped';
+        streamLoading.classList.remove('hidden');
+      }
+    }
+
+    // Reconnect whenever the tab becomes visible again.
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden) { connectStream(); }
+    });
+    // Also handle bfcache restoration (back/forward navigation).
+    window.addEventListener('pageshow', function(e) {
+      if (e.persisted) { connectStream(); }
+    });
+
+    // Initial connection.
+    connectStream();
+
+    // -- formatting helpers --------------------------------------------------
 
     function fmt(value, digits = 1, suffix = '') {
       if (value === null || value === undefined) {
@@ -390,30 +415,37 @@ HTML_PAGE = """<!doctype html>
       return '<div class="meter"><span style="width:' + width.toFixed(1) + '%"></span></div>';
     }
 
+    // -- metrics rendering ---------------------------------------------------
+
     function renderCards(metrics) {
       const cards = [
         {
-          label: 'Current FPS',
-          value: fmt(metrics.current_fps, 1),
-          detail: 'Avg ' + fmt(metrics.avg_fps, 1),
+          label: 'Output FPS',
+          value: fmt(metrics.current_output_fps, 1),
+          detail: 'avg ' + fmt(metrics.avg_output_fps, 1),
+          tooltip:
+            'Actual delivered stream cadence, including the enforced sleep and recognition work.',
         },
         {
-          label: 'CPU Load',
+          label: 'Target FPS',
+          value: fmt(metrics.target_fps, 1),
+          detail: 'configured cap',
+          tooltip: 'The configured maximum loop cadence from --fps. Actual output can be lower.',
+        },
+        {
+          label: 'CPU',
           value: pct(metrics.cpu_usage_pct),
-          detail: '1m load ' + fmt(metrics.loadavg_1m, 2),
+          detail: 'load ' + fmt(metrics.loadavg_1m, 2),
           meterValue: metrics.cpu_usage_pct,
+          tooltip: 'Whole-system CPU usage estimated from /proc/stat deltas.',
         },
         {
-          label: 'CPU Temp',
-          value: fmt(metrics.cpu_temp_c, 1, ' C'),
-          detail: 'Peak RSS ' + fmt(metrics.peak_rss_mb, 1, ' MiB'),
+          label: 'Temp',
+          value: fmt(metrics.cpu_temp_c, 1, '\u00b0C'),
+          detail: 'RSS ' + fmt(metrics.peak_rss_mb, 0, ' MB'),
           meterValue: metrics.cpu_temp_c,
           meterMax: 100,
-        },
-        {
-          label: 'Recognized',
-          value: String(metrics.last_recognized_faces ?? 0),
-          detail: 'Gallery size ' + String(metrics.gallery_size ?? 0),
+          tooltip: 'Raspberry Pi SoC temperature from the thermal sensor.',
         },
       ];
 
@@ -422,9 +454,10 @@ HTML_PAGE = """<!doctype html>
         const meterMarkup = Object.prototype.hasOwnProperty.call(card, 'meterValue')
           ? meter(card.meterValue, card.meterMax ?? 100)
           : '';
+        const tooltip = card.tooltip ? ' title="' + card.tooltip + '"' : '';
         return (
           '<div class="metric-card">' +
-            '<div class="metric-label">' + card.label + '</div>' +
+            '<div class="metric-label"' + tooltip + '>' + card.label + '</div>' +
             '<div class="metric-value">' + card.value + '</div>' +
             '<div class="metric-detail">' + detail + '</div>' +
             meterMarkup +
@@ -435,10 +468,15 @@ HTML_PAGE = """<!doctype html>
 
     function renderRows(container, rows) {
       container.innerHTML = rows.map((row) => (
+        (function() {
+          const tooltip = row[2] ? ' title="' + row[2] + '"' : '';
+          return (
         '<div class="list-row">' +
-          '<div class="list-key">' + row[0] + '</div>' +
+          '<div class="list-key"' + tooltip + '>' + row[0] + '</div>' +
           '<div class="list-value">' + row[1] + '</div>' +
         '</div>'
+          );
+        })()
       )).join('');
     }
 
@@ -446,54 +484,90 @@ HTML_PAGE = """<!doctype html>
       renderCards(metrics);
 
       renderRows(systemMetrics, [
-        ['Accelerator', metrics.accelerator_mode || 'cpu-only'],
+        [
+          'Accelerator',
+          metrics.accelerator_mode || 'cpu-only',
+          'Which inference provider is currently doing the recognition work.'
+        ],
         [
           'GPU usage',
           metrics.gpu_usage_pct === null
-            ? 'not used / unavailable'
-            : pct(metrics.gpu_usage_pct)
+            ? 'n/a'
+            : pct(metrics.gpu_usage_pct),
+          'Kernel-reported GPU busy percentage when available.'
         ],
-        ['Current RSS', fmt(metrics.current_rss_mb, 1, ' MiB')],
-        ['Peak RSS', fmt(metrics.peak_rss_mb, 1, ' MiB')],
-        ['Load avg (1m / 5m / 15m)', [
+        [
+          'Current RSS',
+          fmt(metrics.current_rss_mb, 1, ' MB'),
+          'Current process resident memory.'
+        ],
+        [
+          'Peak RSS',
+          fmt(metrics.peak_rss_mb, 1, ' MB'),
+          'Peak resident memory used by this process.'
+        ],
+        ['Load avg 1/5/15m', [
           fmt(metrics.loadavg_1m, 2),
           fmt(metrics.loadavg_5m, 2),
           fmt(metrics.loadavg_15m, 2)
-        ].join(' / ')],
+        ].join(' / '), 'OS load average over 1, 5, and 15 minutes.'],
       ]);
 
       renderRows(pipelineMetrics, [
-        ['Detector cadence', 'every ' + String(metrics.det_every ?? 1) + ' frame(s)'],
-        ['Last loop', fmt(metrics.last_loop_ms, 1, ' ms')],
-        ['Last detect / track / embed', [
-          fmt(metrics.last_detect_ms, 1, ' ms'),
-          fmt(metrics.last_track_ms, 1, ' ms'),
-          fmt(metrics.last_embed_ms, 1, ' ms')
-        ].join(' / ')],
-        ['Last faces / fresh tracks', [
+        [
+          'Detect cadence',
+          'every ' + String(metrics.det_every ?? 1) + ' frame(s)',
+          'How often the face detector runs.'
+        ],
+        [
+          'Processing FPS',
+          fmt(metrics.current_processing_fps, 1),
+          'Loop body speed excluding the intentional sleep.'
+        ],
+        [
+          'Last loop',
+          fmt(metrics.last_loop_ms, 1, ' ms'),
+          'Processing time for the latest frame.'
+        ],
+        ['Detect / track / embed', [
+          fmt(metrics.last_detect_ms, 1),
+          fmt(metrics.last_track_ms, 1),
+          fmt(metrics.last_embed_ms, 1)
+        ].join(' / ') + ' ms', 'Per-stage timings for the latest frame.'],
+        ['Faces / fresh tracks', [
           String(metrics.last_faces ?? 0),
           String(metrics.last_fresh_tracks ?? 0)
-        ].join(' / ')],
+        ].join(' / '),
+          'Visible tracked faces and how many were refreshed on the latest frame.'
+        ],
         ['Refreshes / reuses', [
           String(metrics.last_refreshes ?? 0),
           String(metrics.last_reuses ?? 0)
-        ].join(' / ')],
-        ['Averages (loop / detect / track / embed)', [
-          fmt(metrics.avg_loop_ms, 1, ' ms'),
-          fmt(metrics.avg_detect_ms, 1, ' ms'),
-          fmt(metrics.avg_track_ms, 1, ' ms'),
-          fmt(metrics.avg_embed_ms, 1, ' ms')
-        ].join(' / ')],
+        ].join(' / '), 'Embeddings recomputed vs reused from cache.'],
+        [
+          'Recognized / gallery',
+          [
+            String(metrics.last_recognized_faces ?? 0),
+            String(metrics.gallery_size ?? 0)
+          ].join(' / '),
+          'Recognized faces versus confirmed gallery identities.'
+        ],
+        ['Avg loop / det / trk / emb', [
+          fmt(metrics.avg_loop_ms, 1),
+          fmt(metrics.avg_detect_ms, 1),
+          fmt(metrics.avg_track_ms, 1),
+          fmt(metrics.avg_embed_ms, 1)
+        ].join(' / ') + ' ms', 'Rolling averages since start.'],
       ]);
 
       runtimeStatus.innerHTML =
-        '<strong>Frames processed:</strong> ' + String(metrics.frames_processed ?? 0) +
+        '<strong>Frames:</strong> ' + String(metrics.frames_processed ?? 0) +
         ' &nbsp;|&nbsp; <strong>Uptime:</strong> ' + fmt(metrics.uptime_seconds, 1, ' s') +
         ' &nbsp;|&nbsp; <strong>Embed refresh:</strong> ' +
-        (metrics.embed_refresh_enabled ? 'enabled' : 'always recompute');
+        (metrics.embed_refresh_enabled ? 'on' : 'off');
 
       if (metrics.last_error) {
-        errorBanner.textContent = 'Latest runtime error: ' + metrics.last_error;
+        errorBanner.textContent = 'Error: ' + metrics.last_error;
         errorBanner.classList.add('visible');
       } else {
         errorBanner.textContent = '';
@@ -501,16 +575,31 @@ HTML_PAGE = """<!doctype html>
       }
     }
 
+    // -- metrics poll (single source of truth for connectivity) ---------------
+
     async function refreshMetrics() {
       try {
         const response = await fetch('/metrics.json', { cache: 'no-store' });
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
+          throw new Error('HTTP ' + response.status);
         }
         const metrics = await response.json();
+        const wasDisconnected = disconnected;
+        failCount = 0;
+        setDisconnected(false);
+        // Reconnect stream if we just recovered from a disconnect.
+        if (wasDisconnected) { connectStream(); }
+        // Check if the MJPEG connection has delivered a frame yet.
+        checkStreamAlive();
         renderMetrics(metrics);
       } catch (error) {
-        runtimeStatus.textContent = 'Metrics unavailable: ' + error;
+        failCount++;
+        if (failCount >= 3) {
+          setDisconnected(true);
+        }
+        runtimeStatus.textContent = disconnected
+          ? 'Server disconnected'
+          : 'Retrying... (' + failCount + ')';
         errorBanner.textContent = '';
         errorBanner.classList.remove('visible');
       }
@@ -955,6 +1044,7 @@ def build_runtime(args: argparse.Namespace, pipeline: PipelineLike) -> LiveRunti
     metrics_json_path = resolve_project_path(ROOT, args.metrics_json) if args.metrics_json else None
     config = LiveRuntimeConfig(
         max_faces=args.max_faces,
+        target_fps=args.fps,
         det_every=args.det_every,
         track_iou_thresh=args.track_iou_thresh,
         track_max_missed=args.track_max_missed,
@@ -1112,22 +1202,24 @@ def _render_message_page(title: str, message: str) -> str:
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
   <title>{safe_title}</title>
   <style>
-    body {{ margin: 0; font-family: sans-serif; background: #101820; color: #f5f5f5;
-      min-height: 100vh; display: grid; place-items: center; }}
+    body {{ margin: 0; font-family: \"IBM Plex Sans\", \"Segoe UI\", system-ui, sans-serif;
+      background: #000; color: #eee; min-height: 100vh; display: grid; place-items: center; }}
     main {{ width: min(100%, 720px); padding: 1rem; box-sizing: border-box; }}
-    article {{ border: 1px solid #2b3a42; border-radius: 0.5rem; padding: 1rem;
-      background: rgba(255, 255, 255, 0.03); }}
-    a {{ color: #b9fbc0; }}
-    pre {{ white-space: pre-wrap; font-family: monospace; }}
+    h1 {{ font-size: 1.2rem; }}
+    a {{ color: #eee; text-decoration: underline; text-underline-offset: 0.2em; }}
+    a:hover {{ color: #fff; }}
+    pre {{ white-space: pre-wrap; font-family: monospace; color: #999; }}
+    .links {{ display: flex; gap: 1.5rem; margin-top: 1rem; font-size: 0.9rem; }}
   </style>
 </head>
 <body>
   <main>
-    <article>
-      <h1>{safe_title}</h1>
-      <pre>{safe_message}</pre>
-      <p><a href=\"/\">Back to live stream</a></p>
-    </article>
+    <h1>{safe_title}</h1>
+    <pre>{safe_message}</pre>
+    <div class=\"links\">
+      <a href=\"/\">Live feed</a>
+      <a href=\"/gallery\">Gallery</a>
+    </div>
   </main>
 </body>
 </html>
@@ -1151,25 +1243,21 @@ def _render_gallery_page(
 <head>
   <meta charset=\"utf-8\">
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-  <title>Valenia Gallery Review</title>
+  <title>Valenia Gallery</title>
   <style>
     :root {{
       color-scheme: dark;
-      --bg: #0b1217;
-      --panel: #142028;
-      --border: #2f4654;
-      --text: #ecf4f3;
-      --muted: #97adb7;
-      --accent: #83d483;
-      --danger: #ef6f6c;
+      --bg: #000;
+      --border: #333;
+      --text: #eee;
+      --muted: #999;
+      --danger: #e55;
     }}
     body {{
       margin: 0;
-      font-family: \"IBM Plex Sans\", \"Segoe UI\", sans-serif;
+      font-family: \"IBM Plex Sans\", \"Segoe UI\", system-ui, sans-serif;
       color: var(--text);
-      background:
-        radial-gradient(circle at top right, rgba(84, 198, 235, 0.12), transparent 30%),
-        var(--bg);
+      background: var(--bg);
       min-height: 100vh;
     }}
     main {{
@@ -1178,27 +1266,40 @@ def _render_gallery_page(
       padding: 1rem;
       box-sizing: border-box;
     }}
-    .hero {{
-      margin-bottom: 1rem;
-      padding: 1rem 1.1rem;
-      border-radius: 0.9rem;
-      border: 1px solid var(--border);
-      background: linear-gradient(155deg, rgba(20, 32, 40, 0.98), rgba(15, 24, 30, 0.96));
+    a {{
+      color: var(--text);
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
     }}
-    .hero p {{
-      color: var(--muted);
-      line-height: 1.45;
-      margin: 0.4rem 0 0;
+    a:hover {{
+      color: #fff;
     }}
-    .hero-links {{
+    nav {{
       display: flex;
+      align-items: baseline;
+      gap: 1.5rem;
+      padding: 0 0 1rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1rem;
       flex-wrap: wrap;
-      gap: 0.75rem;
-      margin-top: 0.9rem;
     }}
-    .hero-links a {{
-      color: #d8f7ad;
-      text-decoration: none;
+    nav strong {{
+      font-size: 1.1rem;
+      margin-right: auto;
+    }}
+    nav a {{
+      font-size: 0.9rem;
+      color: var(--muted);
+    }}
+    nav a:hover {{
+      color: var(--text);
+    }}
+    h2, h3 {{
+      margin: 0 0 0.75rem;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
       font-weight: 600;
     }}
     .columns {{
@@ -1207,80 +1308,106 @@ def _render_gallery_page(
       gap: 1rem;
       align-items: start;
     }}
-    .panel {{
-      padding: 1rem;
-      border-radius: 0.9rem;
-      border: 1px solid var(--border);
-      background: linear-gradient(160deg, rgba(20, 32, 40, 0.96), rgba(15, 24, 30, 0.98));
-    }}
     .card-list {{
       display: grid;
-      gap: 0.8rem;
+      gap: 0.75rem;
     }}
     .card {{
       display: grid;
-      grid-template-columns: 120px minmax(0, 1fr);
-      gap: 0.9rem;
-      padding: 0.85rem;
-      border-radius: 0.8rem;
-      border: 1px solid rgba(47, 70, 84, 0.75);
-      background: rgba(255, 255, 255, 0.03);
+      grid-template-columns: 100px minmax(0, 1fr);
+      gap: 0.75rem;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid #1a1a1a;
+    }}
+    .card:last-child {{
+      border-bottom: 0;
     }}
     .thumb {{
-      width: 120px;
+      width: 100px;
       aspect-ratio: 1 / 1;
       object-fit: cover;
-      border-radius: 0.6rem;
-      border: 1px solid rgba(47, 70, 84, 0.85);
+      border-radius: 4px;
       background: #000;
     }}
     .thumb.empty {{
       display: grid;
       place-items: center;
+      border: 1px solid var(--border);
       color: var(--muted);
       font-size: 0.8rem;
     }}
+    .card-name {{
+      margin: 0 0 0.2rem;
+      font-size: 1rem;
+      color: var(--text);
+      text-transform: none;
+      letter-spacing: 0;
+    }}
     .meta {{
       color: var(--muted);
-      font-size: 0.9rem;
-      margin: 0.15rem 0 0.75rem;
+      font-size: 0.85rem;
+      margin: 0.1rem 0 0.5rem;
     }}
     form {{
       display: grid;
-      gap: 0.55rem;
-      margin-top: 0.6rem;
+      gap: 0.5rem;
+      margin-top: 0.4rem;
     }}
     input, button {{
       font: inherit;
     }}
-    input[type=\"text\"] {{
-      padding: 0.6rem;
-      border-radius: 0.55rem;
+    input[type=\"text\"],
+    input[type=\"file\"] {{
+      padding: 0.5rem;
+      border-radius: 4px;
       border: 1px solid var(--border);
-      background: #12212a;
+      background: #111;
       color: var(--text);
     }}
     .button-row {{
       display: flex;
       flex-wrap: wrap;
-      gap: 0.55rem;
+      gap: 0.5rem;
     }}
     button {{
       width: fit-content;
-      padding: 0.65rem 0.95rem;
-      border-radius: 0.55rem;
-      border: 0;
-      background: linear-gradient(135deg, var(--accent), #b7ec87);
-      color: #0b1710;
+      padding: 0.55rem 0.85rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--text);
+      color: #000;
       font-weight: 700;
       cursor: pointer;
     }}
     button.delete {{
-      background: rgba(239, 111, 108, 0.12);
-      color: #ffd4d2;
-      border: 1px solid rgba(239, 111, 108, 0.25);
+      background: transparent;
+      color: #fcc;
+      border-color: rgba(238, 85, 85, 0.3);
     }}
     .empty {{
+      color: var(--muted);
+    }}
+    .enroll-section {{
+      margin-bottom: 1.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }}
+    .enroll-section p {{
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0 0 0.75rem;
+      line-height: 1.4;
+    }}
+    .enroll-form {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: end;
+    }}
+    .enroll-form label {{
+      display: grid;
+      gap: 0.25rem;
+      font-size: 0.85rem;
       color: var(--muted);
     }}
     @media (max-width: 980px) {{
@@ -1294,33 +1421,47 @@ def _render_gallery_page(
       }}
       .thumb {{
         width: 100%;
-        max-width: 220px;
+        max-width: 200px;
+      }}
+      .enroll-form {{
+        flex-direction: column;
+        align-items: stretch;
       }}
     }}
   </style>
 </head>
 <body>
   <main>
-    <section class=\"hero\">
-      <h1>Gallery Review</h1>
-      <p>
-        Unknown faces are auto-captured into the review inbox as <code>unknown-xxxx</code>.
-        Promote one by giving it a real name. If that name already exists, we merge the
-        unknown samples into the existing identity automatically.
-      </p>
-      <div class=\"hero-links\">
-        <a href=\"/\">Back to live camera</a>
-        <a href=\"/metrics.json\">Raw metrics JSON</a>
-      </div>
+    <nav>
+      <strong>Valenia</strong>
+      <a href=\"/\">Live Feed</a>
+      <a href=\"/stream.mjpg\">Stream</a>
+      <a href=\"/metrics.json\">Metrics JSON</a>
+    </nav>
+    <section class=\"enroll-section\">
+      <h2>Enroll Identity</h2>
+      <p>Upload clear face photos to create or update a gallery identity.</p>
+      <form class=\"enroll-form\" action=\"/enroll\" method=\"post\"
+            enctype=\"multipart/form-data\">
+        <label>
+          Name
+          <input type=\"text\" name=\"name\" required>
+        </label>
+        <label>
+          Photos
+          <input type=\"file\" name=\"photos\" accept=\"image/*\" multiple required>
+        </label>
+        <button type=\"submit\">Enroll</button>
+      </form>
     </section>
     <div class=\"columns\">
-      <section class=\"panel\">
+      <section>
         <h2>Confirmed Identities</h2>
         <div class=\"card-list\">
           {identity_cards}
         </div>
       </section>
-      <section class=\"panel\">
+      <section>
         <h2>Unknown Review Inbox</h2>
         <div class=\"card-list\">
           {unknown_cards}
@@ -1339,23 +1480,20 @@ def _render_identity_card(record: IdentityRecord) -> str:
     sample_count = record.sample_count
     preview = _render_preview_image("identity", record.slug, record.preview_filename)
     return f"""
-<article class=\"card\">
+<div class=\"card\">
   {preview}
   <div>
-    <h3>{name}</h3>
-    <p class=\"meta\">slug={slug} • samples={sample_count}</p>
+    <h3 class=\"card-name\">{name}</h3>
+    <p class=\"meta\">{slug} &middot; {sample_count} samples</p>
     <form action=\"/gallery/rename\" method=\"post\">
       <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
-      <label>
-        <span class=\"meta\">Rename display name</span>
-        <input type=\"text\" name=\"name\" value=\"{name}\" required>
-      </label>
+      <input type=\"text\" name=\"name\" value=\"{name}\" required placeholder=\"New name\">
       <div class=\"button-row\">
-        <button type=\"submit\">Save Name</button>
+        <button type=\"submit\">Rename</button>
       </div>
     </form>
   </div>
-</article>
+</div>
 """
 
 
@@ -1365,29 +1503,26 @@ def _render_unknown_card(record: UnknownRecord) -> str:
     sample_count = record.sample_count
     preview = _render_preview_image("unknown", slug_raw, record.preview_filename)
     return f"""
-<article class=\"card\">
+<div class=\"card\">
   {preview}
   <div>
-    <h3>{slug}</h3>
-    <p class=\"meta\">captures={sample_count}</p>
+    <h3 class=\"card-name\">{slug}</h3>
+    <p class=\"meta\">{sample_count} captures</p>
     <form action=\"/gallery/promote\" method=\"post\">
       <input type=\"hidden\" name=\"unknown_slug\" value=\"{slug}\">
-      <label>
-        <span class=\"meta\">Promote to name (or type an existing name to merge)</span>
-        <input type=\"text\" name=\"name\" placeholder=\"Alice\" required>
-      </label>
+      <input type=\"text\" name=\"name\" placeholder=\"Name to promote as\" required>
       <div class=\"button-row\">
-        <button type=\"submit\">Promote to Gallery</button>
-      </div>
+        <button type=\"submit\">Promote</button>
+        </div>
     </form>
-    <form action=\"/gallery/delete-unknown\" method=\"post\">
+    <form action=\"/gallery/delete-unknown\" method=\"post\" style=\"margin-top:0\">
       <input type=\"hidden\" name=\"unknown_slug\" value=\"{slug}\">
       <div class=\"button-row\">
         <button class=\"delete\" type=\"submit\">Discard</button>
       </div>
     </form>
   </div>
-</article>
+</div>
 """
 
 

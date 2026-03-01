@@ -25,6 +25,7 @@ from tracking import SimpleFaceTracker, Track
 @dataclass(frozen=True)
 class LiveRuntimeConfig:
     max_faces: int
+    target_fps: float
     det_every: int
     track_iou_thresh: float
     track_max_missed: int
@@ -73,9 +74,11 @@ class LiveMetricsSnapshot:
     updated_at_epoch: float
     uptime_seconds: float
     frames_processed: int
+    target_fps: float
     det_every: int
-    current_fps: float
-    avg_fps: float
+    current_output_fps: float
+    avg_output_fps: float
+    current_processing_fps: float
     last_loop_ms: float
     avg_loop_ms: float
     last_detect_ms: float
@@ -113,9 +116,11 @@ class LiveMetricsSnapshot:
             "updated_at_epoch": round(self.updated_at_epoch, 3),
             "uptime_seconds": round(self.uptime_seconds, 3),
             "frames_processed": self.frames_processed,
+            "target_fps": round(self.target_fps, 3),
             "det_every": self.det_every,
-            "current_fps": round(self.current_fps, 3),
-            "avg_fps": round(self.avg_fps, 3),
+            "current_output_fps": round(self.current_output_fps, 3),
+            "avg_output_fps": round(self.avg_output_fps, 3),
+            "current_processing_fps": round(self.current_processing_fps, 3),
             "last_loop_ms": round(self.last_loop_ms, 3),
             "avg_loop_ms": round(self.avg_loop_ms, 3),
             "last_detect_ms": round(self.last_detect_ms, 3),
@@ -160,11 +165,13 @@ class LiveMetricsCollector:
         write_every_frames: int,
         embed_refresh_enabled: bool,
         det_every: int,
+        target_fps: float,
     ) -> None:
         self.metrics_json_path = metrics_json_path
         self.write_every_frames = max(1, write_every_frames)
         self.embed_refresh_enabled = embed_refresh_enabled
         self.det_every = max(1, det_every)
+        self.target_fps = max(0.0, float(target_fps))
         self._start_mono = time.perf_counter()
         self._lock = threading.Lock()
         self._frames_processed = 0
@@ -187,6 +194,8 @@ class LiveMetricsCollector:
         self._last_recognized_faces = 0
         self._last_refreshes = 0
         self._last_reuses = 0
+        self._last_frame_mono: float | None = None
+        self._last_output_fps = 0.0
         self._cpu_sampler = CpuUsageSampler()
         path_str = None
         if self.metrics_json_path is not None:
@@ -197,9 +206,11 @@ class LiveMetricsCollector:
             updated_at_epoch=time.time(),
             uptime_seconds=0.0,
             frames_processed=0,
+            target_fps=self.target_fps,
             det_every=self.det_every,
-            current_fps=0.0,
-            avg_fps=0.0,
+            current_output_fps=0.0,
+            avg_output_fps=0.0,
+            current_processing_fps=0.0,
             last_loop_ms=0.0,
             avg_loop_ms=0.0,
             last_detect_ms=0.0,
@@ -244,6 +255,7 @@ class LiveMetricsCollector:
         snapshot: LiveMetricsSnapshot
         should_write: bool
         with self._lock:
+            now_mono = time.perf_counter()
             self._frames_processed += 1
             self._sum_loop_ms += loop_ms
             self._sum_detect_ms += frame_result.overlay.detect_ms
@@ -263,6 +275,12 @@ class LiveMetricsCollector:
             self._last_recognized_faces = frame_result.recognized_faces
             self._last_refreshes = frame_result.refreshes
             self._last_reuses = frame_result.reuses
+            if self._last_frame_mono is None:
+                self._last_output_fps = 0.0
+            else:
+                delta_s = now_mono - self._last_frame_mono
+                self._last_output_fps = (1.0 / delta_s) if delta_s > 0.0 else 0.0
+            self._last_frame_mono = now_mono
             snapshot = self._build_snapshot_locked(
                 gallery_size=frame_result.overlay.gallery_size,
                 memory=memory,
@@ -293,17 +311,19 @@ class LiveMetricsCollector:
         frames = self._frames_processed
         uptime = max(0.0, time.perf_counter() - self._start_mono)
         avg_loop_ms = self._sum_loop_ms / frames if frames else 0.0
-        avg_fps = (1000.0 / avg_loop_ms) if avg_loop_ms > 0.0 else 0.0
-        current_fps = (1000.0 / self._last_loop_ms) if self._last_loop_ms > 0.0 else 0.0
+        avg_output_fps = (float(frames) / uptime) if uptime > 0.0 else 0.0
+        current_processing_fps = (1000.0 / self._last_loop_ms) if self._last_loop_ms > 0.0 else 0.0
         path_str = str(self.metrics_json_path) if self.metrics_json_path is not None else None
         system = get_system_stats(self._cpu_sampler)
         return LiveMetricsSnapshot(
             updated_at_epoch=time.time(),
             uptime_seconds=uptime,
             frames_processed=frames,
+            target_fps=self.target_fps,
             det_every=self.det_every,
-            current_fps=current_fps,
-            avg_fps=avg_fps,
+            current_output_fps=self._last_output_fps,
+            avg_output_fps=avg_output_fps,
+            current_processing_fps=current_processing_fps,
             last_loop_ms=self._last_loop_ms,
             avg_loop_ms=avg_loop_ms,
             last_detect_ms=self._last_detect_ms,
@@ -371,6 +391,7 @@ class LiveRuntime:
             write_every_frames=config.metrics_write_every,
             embed_refresh_enabled=not config.disable_embed_refresh,
             det_every=config.det_every,
+            target_fps=config.target_fps,
         )
 
     @property
@@ -432,11 +453,22 @@ class LiveRuntime:
                 emb, emb_ms = self.pipeline.embed_from_kps(frame_bgr, landmarks)
                 embed_ms_total += emb_ms
                 refreshes += 1
-                match = self.gallery.match(emb, self.config.match_threshold)
-                if not match.matched:
+                new_match = self.gallery.match(emb, self.config.match_threshold)
+                if (
+                    not new_match.matched
+                    and state is not None
+                    and state.match.matched
+                    and state.match.name is not None
+                ):
+                    match = state.match
+                elif not new_match.matched:
                     crop = _crop_face_region(frame_bgr, track.box)
                     if crop is not None:
                         match = self.gallery.capture_unknown(emb, crop)
+                    else:
+                        match = new_match
+                else:
+                    match = new_match
                 self._track_states[track.track_id] = TrackIdentityState(
                     match=match,
                     last_embed_frame=self._frame_counter,
@@ -520,18 +552,13 @@ class LiveRuntime:
 
 
 def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
-    fresh_tracks = 0
-    recognized_faces = 0
     for face in overlay.faces:
         track = face.track
         box = track.box
-        x1, y1, x2, y2, score = box
-        color = (0, 255, 0) if track.matched else (0, 191, 255)
-        if track.matched:
-            fresh_tracks += 1
+        x1, y1, x2, y2, _score = box
+        color = (0, 220, 140)
         if face.match is not None and face.match.matched:
             color = (64, 224, 208)
-            recognized_faces += 1
         cv2.rectangle(
             frame_bgr,
             (int(x1), int(y1)),
@@ -539,54 +566,37 @@ def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
             color=color,
             thickness=2,
         )
-        label = f"track={track.track_id} conf={score:.2f}"
+
+        label: str | None = None
         if face.match is not None and face.match.matched and face.match.name is not None:
-            label = f"track={track.track_id} {face.match.name} {face.match.score:.2f}"
+            label = face.match.name
         elif face.match is not None:
             unknown_label = face.match.name if face.match.name is not None else "unknown"
-            label = f"track={track.track_id} {unknown_label}"
-        if not track.matched:
-            label = f"{label} hold"
-        cv2.putText(
-            frame_bgr,
-            label,
-            (int(x1), max(16, int(y1) - 6)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            1,
-        )
+            label = unknown_label
+
+        if label is not None:
+            cv2.putText(
+                frame_bgr,
+                label,
+                (int(x1), max(16, int(y1) - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+            )
+            cv2.putText(
+                frame_bgr,
+                label,
+                (int(x1), max(16, int(y1) - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (12, 18, 20),
+                1,
+            )
         if track.kps is None:
             continue
         for point in track.kps:
             cv2.circle(frame_bgr, (int(point[0]), int(point[1])), 2, (0, 0, 255), -1)
-
-    status = (
-        f"tracks={len(overlay.faces)} "
-        f"fresh={fresh_tracks} "
-        f"known={recognized_faces}/{overlay.gallery_size} "
-        f"det={overlay.detect_ms:.1f}ms "
-        f"track={overlay.track_ms:.1f}ms "
-        f"emb={overlay.embed_ms_total:.1f}ms"
-    )
-    cv2.putText(
-        frame_bgr,
-        status,
-        (10, 24),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (255, 255, 255),
-        2,
-    )
-    cv2.putText(
-        frame_bgr,
-        status,
-        (10, 24),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 0, 0),
-        1,
-    )
 
 
 def _crop_face_region(frame_bgr: UInt8Array, box: Float32Array) -> UInt8Array | None:

@@ -163,6 +163,7 @@ def build_runtime(
         gallery=gallery,
         config=LiveRuntimeConfig(
             max_faces=3,
+            target_fps=8.0,
             det_every=det_every,
             track_iou_thresh=0.3,
             track_max_missed=3,
@@ -271,8 +272,10 @@ def test_live_runtime_metrics_snapshot_reports_det_every() -> None:
 
     snapshot = runtime.metrics_snapshot
     assert snapshot["det_every"] == 3
+    assert snapshot["target_fps"] == 8.0
     assert snapshot["frames_processed"] == 1
-    assert snapshot["current_fps"] == 125.0
+    assert snapshot["current_output_fps"] == 0.0
+    assert snapshot["current_processing_fps"] == 125.0
     assert snapshot["accelerator_mode"] == "cpu-only (ONNX Runtime CPUExecutionProvider)"
     assert snapshot["last_error"] == "camera disconnected"
 

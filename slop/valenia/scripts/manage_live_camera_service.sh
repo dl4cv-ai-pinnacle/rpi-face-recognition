@@ -26,6 +26,7 @@ else
 fi
 
 SERVICE_ARGS=(
+  --fps 30
   --det-every 2
   --track-max-missed 3
   --track-iou-thresh 0.3
