@@ -6,21 +6,21 @@
 **Repository:** [github.com/dl4cv-ai-pinnacle/rpi-face-recognition](https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition)
 **Branch:** [feat/#1-valenia](https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition/tree/feat/%231-valenia)
 
-*This report was generated with the help of Claude Opus 4.6.*
+_This report was generated with the help of Claude Opus 4.6._
 
 ---
 
 ## 1. System Overview
 
-| Component | Spec |
-|-----------|------|
-| Board | Raspberry Pi 5, 8 GB RAM |
-| OS | Debian 13 (trixie), kernel 6.12 |
-| Camera | Raspberry Pi Camera Module (via `rpicam`) |
-| Inference | ONNX Runtime CPUExecutionProvider (ARM Cortex-A76, 4 cores) |
-| Language | Python 3.13 |
-| Package mgmt | `uv` with `pyproject.toml` |
-| Quality gates | ruff format + ruff check + pyright + pytest (pre-commit) |
+| Component     | Spec                                                        |
+| ------------- | ----------------------------------------------------------- |
+| Board         | Raspberry Pi 5, 8 GB RAM                                    |
+| OS            | Debian 13 (trixie), kernel 6.12                             |
+| Camera        | Raspberry Pi Camera Module (via `rpicam`)                   |
+| Inference     | ONNX Runtime CPUExecutionProvider (ARM Cortex-A76, 4 cores) |
+| Language      | Python 3.13                                                 |
+| Package mgmt  | `uv` with `pyproject.toml`                                  |
+| Quality gates | ruff format + ruff check + pyright + pytest (pre-commit)    |
 
 ---
 
@@ -95,11 +95,11 @@ making A/B comparisons trivial (e.g. FP32 vs INT8 embedder on the same image).
 
 ## 3. Models
 
-| Model | Task | Output | Size |
-|-------|------|--------|------|
-| SCRFD-500M (`det_500m.onnx`) | Face detection | Boxes + 5-point landmarks | ~2 MB |
-| MobileFaceNet (`w600k_mbf.onnx`) | Embedding | 512-d float32 vector | 12.99 MB |
-| MobileFaceNet INT8 (`w600k_mbf.int8.onnx`) | Embedding | 512-d float32 vector | 8.39 MB |
+| Model                                      | Task           | Output                    | Size     |
+| ------------------------------------------ | -------------- | ------------------------- | -------- |
+| SCRFD-500M (`det_500m.onnx`)               | Face detection | Boxes + 5-point landmarks | ~2 MB    |
+| MobileFaceNet (`w600k_mbf.onnx`)           | Embedding      | 512-d float32 vector      | 12.99 MB |
+| MobileFaceNet INT8 (`w600k_mbf.int8.onnx`) | Embedding      | 512-d float32 vector      | 8.39 MB  |
 
 Both from the InsightFace `buffalo_sc` pack. INT8 model produced via
 `onnxruntime.quantization.quantize_dynamic` (MatMul + Gemm, per-tensor QInt8).
@@ -196,15 +196,15 @@ we'll evaluate in the next phase.
 Standard face verification benchmark. View2 protocol: 6000 pairs, 10-fold
 cross-validation, threshold selected on train folds.
 
-| Metric | FP32 | INT8 | Delta |
-|--------|------|------|-------|
-| View2 10-fold accuracy | 94.75% | 94.72% | -0.03 pp |
-| ROC-AUC | 0.9325 | 0.9326 | +0.0001 |
-| EER | 11.20% | 11.20% | 0 |
-| TAR @ FAR <= 1% | 88.00% | 88.00% | 0 |
-| Avg detect latency | 20.84 ms | 21.65 ms | +0.81 ms |
-| Avg embed latency | 28.64 ms | 28.01 ms | -0.63 ms |
-| Peak RSS | 271.94 MB | 265.94 MB | -6.00 MB |
+| Metric                 | FP32      | INT8      | Delta    |
+| ---------------------- | --------- | --------- | -------- |
+| View2 10-fold accuracy | 94.75%    | 94.72%    | -0.03 pp |
+| ROC-AUC                | 0.9325    | 0.9326    | +0.0001  |
+| EER                    | 11.20%    | 11.20%    | 0        |
+| TAR @ FAR <= 1%        | 88.00%    | 88.00%    | 0        |
+| Avg detect latency     | 20.84 ms  | 21.65 ms  | +0.81 ms |
+| Avg embed latency      | 28.64 ms  | 28.01 ms  | -0.63 ms |
+| Peak RSS               | 271.94 MB | 265.94 MB | -6.00 MB |
 
 **Takeaway:** INT8 is a free lunch -- 35% smaller model, ~0.6 ms faster
 embeddings, 6 MB less RAM, zero accuracy cost.
@@ -215,20 +215,20 @@ embeddings, 6 MB less RAM, zero accuracy cost.
 
 ### Single-Image Latency
 
-| Metric | FP32 | INT8 | Delta |
-|--------|------|------|-------|
-| Avg loop latency | 70.39 ms | 54.27 ms | -16.12 ms |
-| Avg FPS | 14.21 | 18.43 | +4.22 (1.30x) |
-| Avg detect latency | 23.44 ms | 21.84 ms | -1.60 ms |
-| Avg embed latency | 28.88 ms | 27.89 ms | -0.99 ms |
-| Peak RSS | 233.95 MB | 228.25 MB | -5.70 MB |
+| Metric             | FP32      | INT8      | Delta         |
+| ------------------ | --------- | --------- | ------------- |
+| Avg loop latency   | 70.39 ms  | 54.27 ms  | -16.12 ms     |
+| Avg FPS            | 14.21     | 18.43     | +4.22 (1.30x) |
+| Avg detect latency | 23.44 ms  | 21.84 ms  | -1.60 ms      |
+| Avg embed latency  | 28.88 ms  | 27.89 ms  | -0.99 ms      |
+| Peak RSS           | 233.95 MB | 228.25 MB | -5.70 MB      |
 
 ### A/B Variant Comparison (same session)
 
 | Variant | Avg loop ms | Avg FPS |
-|---------|-------------|---------|
-| FP32 | 58.81 | 17.00 |
-| INT8 | 52.78 | 18.95 |
+| ------- | ----------- | ------- |
+| FP32    | 58.81       | 17.00   |
+| INT8    | 52.78       | 18.95   |
 
 ### Gap: Video-Level Recognition Benchmark
 
@@ -325,12 +325,12 @@ data/gallery/
 33 tests across 4 files, all running with stubbed `cv2` and protocol-based
 dependency injection (no real models or camera needed):
 
-| Test file | Tests | What it covers |
-|-----------|-------|----------------|
-| `test_gallery_store.py` | 17 | Enroll, match, promote, merge, rename, delete, enrich, upload |
-| `test_live_runtime.py` | 9 | Tracking, embedding cache, enrichment, metrics, delegation |
-| `test_pipeline_factory.py` | 3 | Size parsing, path resolution, factory injection |
-| `test_quality.py` | 4 | Quality scoring edge cases |
+| Test file                  | Tests | What it covers                                                |
+| -------------------------- | ----- | ------------------------------------------------------------- |
+| `test_gallery_store.py`    | 17    | Enroll, match, promote, merge, rename, delete, enrich, upload |
+| `test_live_runtime.py`     | 9     | Tracking, embedding cache, enrichment, metrics, delegation    |
+| `test_pipeline_factory.py` | 3     | Size parsing, path resolution, factory injection              |
+| `test_quality.py`          | 4     | Quality scoring edge cases                                    |
 
 ---
 
