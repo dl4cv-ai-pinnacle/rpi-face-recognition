@@ -955,6 +955,9 @@ class LiveCameraHTTPServer(ThreadingHTTPServer):
 class LiveCameraHandler(BaseHTTPRequestHandler):
     server_version = "ValeniaLiveCamera/0.1"
 
+    def do_HEAD(self) -> None:  # noqa: N802
+        self.do_GET()
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/":
