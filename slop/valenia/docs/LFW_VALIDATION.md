@@ -7,10 +7,12 @@ This repository now includes an offline validation pipeline that runs the same c
 3. `MobileFaceNet` embedding (`w600k_mbf.onnx`)
 4. Cosine-similarity verification on LFW pairs
 
+Run the commands below from the repo root.
+
 ## Dataset Setup
 
 ```bash
-./scripts/download_lfw_dataset.sh
+./slop/valenia/scripts/download_lfw_dataset.sh
 ```
 
 This downloads and verifies:
@@ -25,16 +27,16 @@ This downloads and verifies:
 Dev train/test split:
 
 ```bash
-python3 -u scripts/evaluate_lfw.py \
-  --output-json docs/metrics/lfw_dev_baseline.json
+python3 -u slop/valenia/scripts/evaluate_lfw.py \
+  --output-json slop/valenia/docs/metrics/lfw_dev_baseline.json
 ```
 
 Dev split + official view2 cross-validation:
 
 ```bash
-python3 -u scripts/evaluate_lfw.py \
-  --view2-pairs data/lfw/pairs.txt \
-  --output-json docs/metrics/lfw_dev_view2_baseline.json
+python3 -u slop/valenia/scripts/evaluate_lfw.py \
+  --view2-pairs slop/valenia/data/lfw/pairs.txt \
+  --output-json slop/valenia/docs/metrics/lfw_dev_view2_baseline.json
 ```
 
 ## Protocol
@@ -65,7 +67,7 @@ Machine:
 - Debian 13 (trixie)
 - ONNX Runtime CPU
 
-From `docs/metrics/lfw_dev_view2_baseline.json`:
+From `slop/valenia/docs/metrics/lfw_dev_view2_baseline.json`:
 
 - Train best threshold: `0.2280`
 - Train accuracy: `0.9491`

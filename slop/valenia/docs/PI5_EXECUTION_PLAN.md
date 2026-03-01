@@ -9,8 +9,9 @@ This plan combines the two reports from issue `#1` and is tuned for this machine
 - Detection: `SCRFD-500M` (`det_500m.onnx`)
 - Alignment: ArcFace 5-point affine alignment (`112x112`)
 - Embedding: `MobileFaceNet` (`w600k_mbf.onnx`)
-- Tracking (phase 2): lightweight IoU/centroid, then optional Norfair
-- Matching/storage (phase 3): cosine similarity + SQLite/FAISS
+- Tracking: lightweight IoU tracker in `slop/valenia/src/tracking.py`
+- Matching/storage now: cosine similarity + filesystem gallery
+- Matching/storage later: SQLite/FAISS when the gallery grows
 - Runtime now: ONNX Runtime (CPU) for fast bring-up
 - Future optimization path: MNN/ncnn + FP16/INT8 after FP32 baseline is stable
 
@@ -23,22 +24,22 @@ This plan combines the two reports from issue `#1` and is tuned for this machine
 
 ## Phase Plan
 
-1. Phase 0: Bring-up and instrumentation (today)
+1. Phase 0: Bring-up and instrumentation (completed)
 - Confirm camera, thermals, and model loading.
 - Add repeatable benchmark scripts.
 - Produce first latency/FPS measurements on this Pi.
 
-2. Phase 1: Baseline pipeline correctness (next)
+2. Phase 1: Baseline pipeline correctness (completed)
 - Run detect -> align -> embed on camera frames.
 - Add basic thresholded matching against a tiny local gallery.
 - Validate preprocessing compatibility (RGB/BGR, normalization, template).
 
-3. Phase 2: Real-time stability and tracking
+3. Phase 2: Real-time stability and tracking (in progress)
 - Run detection every `N` frames (`N=2..4`), track in between.
 - Cache embeddings per track and refresh on interval/change.
 - Measure FPS vs face count (1, 2, 3+).
 
-4. Phase 3: Face memory and actions
+4. Phase 3: Face memory and actions (partially started)
 - Enrollment flow with quality checks (pose/blur/min box size).
 - Store identities + metadata in SQLite (FAISS when gallery grows).
 - Event/action hooks (greetings, logging, automation trigger).
@@ -51,11 +52,11 @@ This plan combines the two reports from issue `#1` and is tuned for this machine
 ## Technical Guardrails
 
 - Keep detector/alignment/embedding preprocessing coupled to ArcFace conventions.
-- Treat 0.5 cosine threshold as initial default; tune with collected positives/negatives.
+- Treat `0.228` as the current measured starting threshold; tune with collected positives/negatives.
 - Delay anti-spoofing until core pipeline is stable (add when required by threat model).
 - Log timing per stage, not just total FPS, for each experiment run.
 - Keep static quality gate green before benchmark commits:
-  - `uv run --group dev pre-commit run --all-files`
+  - `uv run --project slop/valenia --group dev pre-commit run --config slop/valenia/.pre-commit-config.yaml --all-files`
 
 ## Success Criteria (Near-Term)
 
@@ -76,6 +77,10 @@ This plan combines the two reports from issue `#1` and is tuned for this machine
 - `buffalo_sc` model bundle downloaded under `models/buffalo_sc/`.
 - Initial benchmark scripts added in this repo for first on-device tests.
 - LFW offline validation pipeline added:
-  - Dataset bootstrap: `scripts/download_lfw_dataset.sh`
-  - Validator: `scripts/evaluate_lfw.py`
-  - Baseline metrics: `docs/LFW_VALIDATION.md`, `docs/metrics/`
+  - Dataset bootstrap: `slop/valenia/scripts/download_lfw_dataset.sh`
+  - Validator: `slop/valenia/scripts/evaluate_lfw.py`
+  - Baseline metrics: `slop/valenia/docs/LFW_VALIDATION.md`, `slop/valenia/docs/metrics/`
+- Live runtime path added:
+  - Stateful runtime: `slop/valenia/src/live_runtime.py`
+  - Live server: `slop/valenia/scripts/live_camera_server.py`
+  - Enrollment + matching: `slop/valenia/src/gallery.py`

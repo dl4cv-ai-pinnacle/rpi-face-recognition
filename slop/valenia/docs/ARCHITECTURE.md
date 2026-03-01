@@ -1,4 +1,4 @@
-# Architecture Principles
+# Architecture
 
 This project stays intentionally small and modular to follow `KISS` + `YAGNI` while keeping room to scale.
 
@@ -47,7 +47,9 @@ This project stays intentionally small and modular to follow `KISS` + `YAGNI` wh
 Use `uv` tooling only:
 
 ```bash
-uv run --group dev pre-commit run --all-files
+uv run --project slop/valenia --group dev pre-commit run \
+  --config slop/valenia/.pre-commit-config.yaml \
+  --all-files
 ```
 
 This runs:
