@@ -209,13 +209,3 @@ __marimo__/
 # Project runtime artifacts
 models/
 data/
-slop/valenia/models/
-slop/valenia/data/
-slop/valenia/.venv/
-slop/valenia/.ruff_cache/
-
-# Python build/cache artifacts (explicit project-level reminder)
-__pycache__/
-*.pyc
-.venv/
-.ruff_cache/

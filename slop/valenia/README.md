@@ -47,9 +47,11 @@ python3 -u slop/valenia/scripts/evaluate_lfw.py \
 python3 slop/valenia/scripts/benchmark_pipeline.py \
   --mode image \
   --image data/lena.jpg \
+  --warmup-runs 5 \
   --runs 50 \
   --det-every 1 \
-  --save-output data/lena_annotated.jpg
+  --save-output data/lena_annotated.jpg \
+  --output-json docs/metrics/image_benchmark_latest.json
 ```
 
 ## INT8 Quantization
@@ -88,6 +90,7 @@ same image:
 ```bash
 python3 slop/valenia/scripts/compare_pipeline_variants.py \
   --image data/lena.jpg \
+  --warmup-runs 5 \
   --runs 30 \
   --a-label fp32 \
   --a-rec-model models/buffalo_sc/w600k_mbf.onnx \
@@ -95,6 +98,9 @@ python3 slop/valenia/scripts/compare_pipeline_variants.py \
   --b-rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
   --output-json docs/metrics/fp32_vs_int8_image_compare.json
 ```
+
+Use `benchmark_pipeline.py` when you need reproducible per-variant RSS numbers.
+Use `compare_pipeline_variants.py` for like-for-like latency/FPS comparisons only.
 
 ## Live Camera
 

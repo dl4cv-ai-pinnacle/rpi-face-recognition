@@ -38,6 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="data/lena.jpg")
     parser.add_argument("--runs", type=int, default=30)
+    parser.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=5,
+        help="Unmeasured warmup iterations before collecting timings; values <0 are treated as 0",
+    )
     parser.add_argument("--ram-cap-mb", type=float, default=4096.0)
     parser.add_argument("--output-json", default="")
 
@@ -73,6 +79,7 @@ def benchmark_variant(
     pipeline: PipelineLike,
     image: UInt8Array,
     runs: int,
+    warmup_runs: int,
     face_limit: int,
     ram_cap_mb: float,
 ) -> VariantSummary:
@@ -81,8 +88,9 @@ def benchmark_variant(
     embed_latencies_ms: list[float] = []
     faces: list[int] = []
     final_memory = enforce_memory_cap(ram_cap_mb, f"{label} comparison startup")
+    total_runs = warmup_runs + max(1, runs)
 
-    for idx in range(runs):
+    for idx in range(total_runs):
         t0 = time.perf_counter()
         det, detect_latency_ms = pipeline.detect(image)
         embed_ms_total = 0.0
@@ -90,12 +98,17 @@ def benchmark_variant(
             for face_idx in range(min(len(det.boxes), face_limit)):
                 _, embed_latency_ms = pipeline.embed_from_kps(image, det.kps[face_idx])
                 embed_ms_total += embed_latency_ms
-        loop_ms.append((time.perf_counter() - t0) * 1000.0)
-        detect_latencies_ms.append(detect_latency_ms)
-        embed_latencies_ms.append(embed_ms_total)
-        faces.append(len(det.boxes))
-        if (idx + 1) % 10 == 0 or idx + 1 == runs:
-            final_memory = enforce_memory_cap(ram_cap_mb, f"{label} comparison iteration {idx + 1}")
+        if idx >= warmup_runs:
+            loop_ms.append((time.perf_counter() - t0) * 1000.0)
+            detect_latencies_ms.append(detect_latency_ms)
+            embed_latencies_ms.append(embed_ms_total)
+            faces.append(len(det.boxes))
+            measured_idx = idx - warmup_runs + 1
+            if measured_idx % 10 == 0 or measured_idx == runs:
+                final_memory = enforce_memory_cap(
+                    ram_cap_mb,
+                    f"{label} comparison iteration {measured_idx}",
+                )
 
     loop_avg = statistics.fmean(loop_ms)
     avg_fps = 1000.0 / loop_avg if loop_avg > 0.0 else 0.0
@@ -118,8 +131,6 @@ def as_dict(summary: VariantSummary) -> dict[str, float | str]:
         "avg_embed_ms": round(summary.avg_embed_ms, 3),
         "avg_faces": round(summary.avg_faces, 3),
         "avg_fps": round(summary.avg_fps, 3),
-        "final_current_rss_mb": round(summary.final_memory.current_rss_mb, 3),
-        "final_peak_rss_mb": round(summary.final_memory.peak_rss_mb, 3),
     }
 
 
@@ -139,10 +150,10 @@ def main() -> int:
                 print(f"Missing required path: {path}")
                 return 2
 
-        startup_memory = enforce_memory_cap(args.ram_cap_mb, "comparison startup")
+        enforce_memory_cap(args.ram_cap_mb, "comparison startup")
         pipeline_a = build_face_pipeline(spec_a)
         pipeline_b = build_face_pipeline(spec_b)
-        post_init_memory = enforce_memory_cap(args.ram_cap_mb, "comparison initialization")
+        enforce_memory_cap(args.ram_cap_mb, "comparison initialization")
 
         frame = np.asarray(image, dtype=np.uint8)
         summary_a = benchmark_variant(
@@ -150,6 +161,7 @@ def main() -> int:
             pipeline=pipeline_a,
             image=frame,
             runs=max(1, args.runs),
+            warmup_runs=max(0, args.warmup_runs),
             face_limit=spec_a.max_faces,
             ram_cap_mb=args.ram_cap_mb,
         )
@@ -158,6 +170,7 @@ def main() -> int:
             pipeline=pipeline_b,
             image=frame,
             runs=max(1, args.runs),
+            warmup_runs=max(0, args.warmup_runs),
             face_limit=spec_b.max_faces,
             ram_cap_mb=args.ram_cap_mb,
         )
@@ -169,14 +182,7 @@ def main() -> int:
         print(f"avg detection latency: {summary_b.avg_detect_ms - summary_a.avg_detect_ms:.3f} ms")
         print(f"avg embedding latency: {summary_b.avg_embed_ms - summary_a.avg_embed_ms:.3f} ms")
         print(f"avg FPS: {summary_b.avg_fps - summary_a.avg_fps:.3f}")
-        print(
-            "peak RSS: "
-            f"{summary_b.final_memory.peak_rss_mb - summary_a.final_memory.peak_rss_mb:.3f} MiB"
-        )
-        print(
-            "model init RSS delta: "
-            f"{post_init_memory.current_rss_mb - startup_memory.current_rss_mb:.3f} MiB"
-        )
+        print("memory note: use benchmark_pipeline.py for isolated RSS comparisons per variant")
 
         if args.output_json:
             out_path = resolve_project_path(ROOT, args.output_json)
@@ -191,10 +197,19 @@ def main() -> int:
                             "avg_detect_ms": summary_b.avg_detect_ms - summary_a.avg_detect_ms,
                             "avg_embed_ms": summary_b.avg_embed_ms - summary_a.avg_embed_ms,
                             "avg_fps": summary_b.avg_fps - summary_a.avg_fps,
-                            "peak_rss_mb": (
-                                summary_b.final_memory.peak_rss_mb
-                                - summary_a.final_memory.peak_rss_mb
-                            ),
+                        },
+                        "config": {
+                            "image": args.image,
+                            "runs": int(max(1, args.runs)),
+                            "warmup_runs": int(max(0, args.warmup_runs)),
+                            "ram_cap_mb": float(args.ram_cap_mb),
+                        },
+                        "notes": {
+                            "memory_comparison": (
+                                "Not reported here because both variants run in one process. "
+                                "Use benchmark_pipeline.py with --output-json for "
+                                "isolated RSS numbers."
+                            )
                         },
                     },
                     indent=2,

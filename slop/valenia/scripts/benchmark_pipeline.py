@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 import sys
 import time
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import cv2
@@ -36,6 +38,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--det-thresh", type=float, default=0.5)
     parser.add_argument("--max-faces", type=int, default=3)
     parser.add_argument("--det-every", type=int, default=3)
+    parser.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=5,
+        help=(
+            "Unmeasured warmup iterations/frames before collecting timings; "
+            "values <0 are treated as 0"
+        ),
+    )
     parser.add_argument("--mode", choices=["image", "camera"], default="image")
     parser.add_argument("--image", help="Input image path when mode=image")
     parser.add_argument("--runs", type=int, default=50, help="Iterations in image mode")
@@ -43,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--save-output", default="", help="Optional annotated output file")
+    parser.add_argument("--output-json", default="", help="Optional JSON report path")
     parser.add_argument(
         "--ram-cap-mb",
         type=float,
@@ -87,7 +99,43 @@ def annotate(frame: UInt8Array, boxes: Float32Array, kps: Float32Array | None) -
     return np.asarray(out, dtype=np.uint8)
 
 
-def print_summary(
+@dataclass(frozen=True)
+class BenchmarkMemory:
+    startup_current_rss: float
+    post_init_current_rss: float
+    final_current_rss: float
+    final_peak_rss: float
+    model_init_delta_rss: float
+
+
+@dataclass(frozen=True)
+class BenchmarkQuantization:
+    enabled: bool
+    model_path: str
+    reused_existing: bool
+    quantize_ms: float
+    original_size_mb: float
+    quantized_size_mb: float
+    size_delta_mb: float
+
+
+@dataclass
+class BenchmarkSummary:
+    frames_measured: int
+    avg_loop_ms: float
+    avg_fps: float
+    avg_detect_ms_when_run: float
+    avg_embed_ms_per_frame: float
+    avg_faces_per_frame: float
+    memory_mb: BenchmarkMemory
+    quantization: BenchmarkQuantization
+    config: dict[str, object] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def build_summary(
     loop_ms: list[float],
     det_ms: list[float],
     emb_ms: list[float],
@@ -96,35 +144,64 @@ def print_summary(
     post_init_memory: MemoryStats,
     final_memory: MemoryStats,
     quantization: QuantizationReport | None,
-) -> None:
+) -> BenchmarkSummary:
     loop_avg = statistics.fmean(loop_ms)
     fps = 1000.0 / loop_avg if loop_avg > 0 else 0.0
     det_avg = statistics.fmean(det_ms) if det_ms else 0.0
     emb_avg = statistics.fmean(emb_ms) if emb_ms else 0.0
     faces_avg = statistics.fmean(face_counts) if face_counts else 0.0
+    return BenchmarkSummary(
+        frames_measured=len(loop_ms),
+        avg_loop_ms=loop_avg,
+        avg_fps=fps,
+        avg_detect_ms_when_run=det_avg,
+        avg_embed_ms_per_frame=emb_avg,
+        avg_faces_per_frame=faces_avg,
+        memory_mb=BenchmarkMemory(
+            startup_current_rss=startup_memory.current_rss_mb,
+            post_init_current_rss=post_init_memory.current_rss_mb,
+            final_current_rss=final_memory.current_rss_mb,
+            final_peak_rss=final_memory.peak_rss_mb,
+            model_init_delta_rss=(post_init_memory.current_rss_mb - startup_memory.current_rss_mb),
+        ),
+        quantization=BenchmarkQuantization(
+            enabled=bool(quantization is not None),
+            model_path=quantization.quantized_model_path if quantization is not None else "",
+            reused_existing=bool(quantization.reused_existing)
+            if quantization is not None
+            else False,
+            quantize_ms=float(quantization.quantize_ms) if quantization else 0.0,
+            original_size_mb=float(quantization.original_size_mb) if quantization else 0.0,
+            quantized_size_mb=float(quantization.quantized_size_mb) if quantization else 0.0,
+            size_delta_mb=float(quantization.size_delta_mb) if quantization else 0.0,
+        ),
+    )
+
+
+def print_summary(summary: BenchmarkSummary) -> None:
+    memory = summary.memory_mb
+    quantization = summary.quantization
     print("\n=== Benchmark summary ===")
-    print(f"frames: {len(loop_ms)}")
-    print(f"avg loop latency: {loop_avg:.2f} ms")
-    print(f"avg FPS: {fps:.2f}")
-    print(f"avg detection latency (when run): {det_avg:.2f} ms")
-    print(f"avg embedding latency total/frame: {emb_avg:.2f} ms")
-    print(f"avg faces detected/frame: {faces_avg:.2f}")
+    print(f"frames: {summary.frames_measured}")
+    print(f"avg loop latency: {summary.avg_loop_ms:.2f} ms")
+    print(f"avg FPS: {summary.avg_fps:.2f}")
+    print(f"avg detection latency (when run): {summary.avg_detect_ms_when_run:.2f} ms")
+    print(f"avg embedding latency total/frame: {summary.avg_embed_ms_per_frame:.2f} ms")
+    print(f"avg faces detected/frame: {summary.avg_faces_per_frame:.2f}")
     print(
         "memory RSS (startup -> post-init -> final current): "
-        f"{startup_memory.current_rss_mb:.2f} -> {post_init_memory.current_rss_mb:.2f} "
-        f"-> {final_memory.current_rss_mb:.2f} MiB"
+        f"{memory.startup_current_rss:.2f} -> {memory.post_init_current_rss:.2f} "
+        f"-> {memory.final_current_rss:.2f} MiB"
     )
-    print(f"peak RSS: {final_memory.peak_rss_mb:.2f} MiB")
-    print(
-        "model init RSS delta: "
-        f"{post_init_memory.current_rss_mb - startup_memory.current_rss_mb:.2f} MiB"
-    )
-    if quantization is not None:
+    print(f"peak RSS: {memory.final_peak_rss:.2f} MiB")
+    print(f"model init RSS delta: {memory.model_init_delta_rss:.2f} MiB")
+    if quantization.enabled:
         quant_status = "reused existing file" if quantization.reused_existing else "generated"
         print(
             "quantized ArcFace model: "
-            f"{quantization.quantized_model_path} ({quant_status}, "
-            f"{quantization.original_size_mb:.2f} -> {quantization.quantized_size_mb:.2f} MiB, "
+            f"{quantization.model_path} ({quant_status}, "
+            f"{quantization.original_size_mb:.2f} -> "
+            f"{quantization.quantized_size_mb:.2f} MiB, "
             f"delta {quantization.size_delta_mb:.2f} MiB)"
         )
         print(f"quantization time: {quantization.quantize_ms:.2f} ms")
@@ -139,11 +216,14 @@ def run_image_mode(
 ) -> int:
     if not args.image:
         raise ValueError("--image is required in image mode")
-    image = cv2.imread(args.image)
+    image_path = resolve_project_path(ROOT, args.image)
+    image = cv2.imread(str(image_path))
     if image is None:
-        raise RuntimeError(f"Failed to read image: {args.image}")
+        raise RuntimeError(f"Failed to read image: {image_path}")
     image = np.asarray(image, dtype=np.uint8)
 
+    warmup_runs = max(0, args.warmup_runs)
+    det_every = max(1, args.det_every)
     loop_ms: list[float] = []
     det_ms: list[float] = []
     emb_ms: list[float] = []
@@ -151,23 +231,30 @@ def run_image_mode(
     last_boxes = np.empty((0, 5), dtype=np.float32)
     last_kps: Float32Array | None = None
 
-    for idx in range(args.runs):
+    total_runs = warmup_runs + max(1, args.runs)
+    for idx in range(total_runs):
         t_loop0 = time.perf_counter()
-        if idx % args.det_every == 0:
+        if idx % det_every == 0:
             frame = pipeline.process_frame(image, max_faces=args.max_faces)
             last_boxes, last_kps = frame.boxes, frame.kps
-            det_ms.append(frame.detect_ms)
-            emb_ms.append(frame.embed_ms_total)
+            current_det_ms = frame.detect_ms
+            current_emb_ms = frame.embed_ms_total
         else:
-            emb_ms.append(0.0)
+            current_det_ms = None
+            current_emb_ms = 0.0
         t_loop1 = time.perf_counter()
-        loop_ms.append((t_loop1 - t_loop0) * 1000.0)
-        face_counts.append(len(last_boxes))
-        if (idx + 1) % 25 == 0 or idx + 1 == args.runs:
-            enforce_memory_cap(args.ram_cap_mb, f"image benchmark iteration {idx + 1}")
+        if idx >= warmup_runs:
+            loop_ms.append((t_loop1 - t_loop0) * 1000.0)
+            if current_det_ms is not None:
+                det_ms.append(current_det_ms)
+            emb_ms.append(current_emb_ms)
+            face_counts.append(len(last_boxes))
+            measured_idx = idx - warmup_runs + 1
+            if measured_idx % 25 == 0 or measured_idx == args.runs:
+                enforce_memory_cap(args.ram_cap_mb, f"image benchmark iteration {measured_idx}")
 
     final_memory = enforce_memory_cap(args.ram_cap_mb, "image benchmark completion")
-    print_summary(
+    summary = build_summary(
         loop_ms,
         det_ms,
         emb_ms,
@@ -177,10 +264,31 @@ def run_image_mode(
         final_memory=final_memory,
         quantization=quantization,
     )
+    summary.config = {
+        "mode": "image",
+        "image": args.image,
+        "runs": int(args.runs),
+        "warmup_runs": warmup_runs,
+        "det_every": det_every,
+        "det_model": args.det_model,
+        "rec_model": args.rec_model,
+        "det_size": args.det_size,
+        "det_thresh": float(args.det_thresh),
+        "max_faces": int(args.max_faces),
+        "ram_cap_mb": float(args.ram_cap_mb),
+    }
+    print_summary(summary)
     if args.save_output:
         annotated = annotate(image, last_boxes, last_kps)
-        cv2.imwrite(args.save_output, annotated)
-        print(f"Saved annotation: {args.save_output}")
+        save_output_path = resolve_project_path(ROOT, args.save_output)
+        save_output_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(save_output_path), annotated)
+        print(f"Saved annotation: {save_output_path}")
+    if args.output_json:
+        out_path = resolve_project_path(ROOT, args.output_json)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(summary.as_dict(), indent=2), encoding="utf-8")
+        print(f"Saved JSON report: {out_path}")
     return 0
 
 
@@ -208,6 +316,8 @@ def run_camera_mode(
     # Warm up camera for stable timings.
     time.sleep(1.0)
 
+    warmup_runs = max(0, args.warmup_runs)
+    det_every = max(1, args.det_every)
     loop_ms: list[float] = []
     det_ms: list[float] = []
     emb_ms: list[float] = []
@@ -216,32 +326,42 @@ def run_camera_mode(
     last_kps: Float32Array | None = None
     last_frame_bgr: UInt8Array | None = None
 
+    measured_frames = max(1, args.frames)
+    total_frames = warmup_runs + measured_frames
     try:
-        for idx in range(args.frames):
+        for idx in range(total_frames):
             t_loop0 = time.perf_counter()
             frame_rgb = np.asarray(picam2.capture_array(), dtype=np.uint8)
             frame_bgr = np.asarray(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), dtype=np.uint8)
             last_frame_bgr = frame_bgr
 
-            if idx % args.det_every == 0:
+            if idx % det_every == 0:
                 frame = pipeline.process_frame(frame_bgr, max_faces=args.max_faces)
                 last_boxes, last_kps = frame.boxes, frame.kps
-                det_ms.append(frame.detect_ms)
-                emb_ms.append(frame.embed_ms_total)
+                current_det_ms = frame.detect_ms
+                current_emb_ms = frame.embed_ms_total
             else:
-                emb_ms.append(0.0)
+                current_det_ms = None
+                current_emb_ms = 0.0
 
             t_loop1 = time.perf_counter()
-            loop_ms.append((t_loop1 - t_loop0) * 1000.0)
-            face_counts.append(len(last_boxes))
-            if (idx + 1) % 25 == 0 or idx + 1 == args.frames:
-                enforce_memory_cap(args.ram_cap_mb, f"camera benchmark iteration {idx + 1}")
+            if idx >= warmup_runs:
+                loop_ms.append((t_loop1 - t_loop0) * 1000.0)
+                if current_det_ms is not None:
+                    det_ms.append(current_det_ms)
+                emb_ms.append(current_emb_ms)
+                face_counts.append(len(last_boxes))
+                measured_idx = idx - warmup_runs + 1
+                if measured_idx % 25 == 0 or measured_idx == measured_frames:
+                    enforce_memory_cap(
+                        args.ram_cap_mb, f"camera benchmark iteration {measured_idx}"
+                    )
 
     finally:
         picam2.stop()
 
     final_memory = enforce_memory_cap(args.ram_cap_mb, "camera benchmark completion")
-    print_summary(
+    summary = build_summary(
         loop_ms,
         det_ms,
         emb_ms,
@@ -251,10 +371,32 @@ def run_camera_mode(
         final_memory=final_memory,
         quantization=quantization,
     )
+    summary.config = {
+        "mode": "camera",
+        "frames": measured_frames,
+        "warmup_runs": warmup_runs,
+        "det_every": det_every,
+        "width": int(args.width),
+        "height": int(args.height),
+        "det_model": args.det_model,
+        "rec_model": args.rec_model,
+        "det_size": args.det_size,
+        "det_thresh": float(args.det_thresh),
+        "max_faces": int(args.max_faces),
+        "ram_cap_mb": float(args.ram_cap_mb),
+    }
+    print_summary(summary)
     if args.save_output and last_frame_bgr is not None:
         annotated = annotate(last_frame_bgr, last_boxes, last_kps)
-        cv2.imwrite(args.save_output, annotated)
-        print(f"Saved annotation: {args.save_output}")
+        save_output_path = resolve_project_path(ROOT, args.save_output)
+        save_output_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(save_output_path), annotated)
+        print(f"Saved annotation: {save_output_path}")
+    if args.output_json:
+        out_path = resolve_project_path(ROOT, args.output_json)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(summary.as_dict(), indent=2), encoding="utf-8")
+        print(f"Saved JSON report: {out_path}")
     return 0
 
 

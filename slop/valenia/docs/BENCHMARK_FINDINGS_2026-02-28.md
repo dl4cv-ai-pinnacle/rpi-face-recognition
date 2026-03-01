@@ -1,6 +1,8 @@
 # Benchmark Findings (2026-02-28)
 
 All runs below were executed on the Raspberry Pi 5 with a 4 GiB RSS cap enforced.
+For repeatable runs, use the same input image, include warmup iterations, and
+save the script JSON artifacts alongside the console summary.
 
 ## FP32 Baseline
 
@@ -12,9 +14,11 @@ Command:
 python3 -u slop/valenia/scripts/benchmark_pipeline.py \
   --mode image \
   --image data/lena.jpg \
+  --warmup-runs 5 \
   --runs 50 \
   --det-every 1 \
-  --ram-cap-mb 4096
+  --ram-cap-mb 4096 \
+  --output-json docs/metrics/image_benchmark_fp32_latest.json
 ```
 
 Results:
@@ -125,10 +129,12 @@ Command:
 python3 -u slop/valenia/scripts/benchmark_pipeline.py \
   --mode image \
   --image data/lena.jpg \
+  --warmup-runs 5 \
   --runs 50 \
   --det-every 1 \
   --rec-model models/buffalo_sc/w600k_mbf.int8.onnx \
-  --ram-cap-mb 4096
+  --ram-cap-mb 4096 \
+  --output-json docs/metrics/image_benchmark_int8_latest.json
 ```
 
 Results:
@@ -155,6 +161,7 @@ Command:
 ```bash
 python3 slop/valenia/scripts/compare_pipeline_variants.py \
   --image data/lena.jpg \
+  --warmup-runs 5 \
   --runs 30 \
   --a-label fp32 \
   --a-rec-model models/buffalo_sc/w600k_mbf.onnx \
@@ -171,6 +178,7 @@ Results:
 - INT8 avg FPS: `18.95`
 - Delta loop latency: `-6.03 ms`
 - Delta FPS: `+1.94`
+- Memory note: use `benchmark_pipeline.py --output-json ...` for isolated per-variant RSS comparisons
 
 JSON artifact:
 
