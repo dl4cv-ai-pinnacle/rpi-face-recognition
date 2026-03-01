@@ -43,6 +43,9 @@ The server binds to `0.0.0.0:8000` by default.
   detector cadence, per-frame timings, and whether the runtime is CPU-only.
 - `/` labels faces with `track=<n>`, where the number is a session-local tracker
   ID, not a person identity ID.
+- `/gallery` shows confirmed identities plus an unknown-review inbox.
+- `/gallery` lets you rename confirmed identities, promote `unknown-xxxx`
+  entries to named identities, or discard them.
 - `/stream.mjpg` returns an MJPEG stream (`multipart/x-mixed-replace`).
 - `/metrics.json` returns the current rolling live metrics snapshot.
 - `/metrics.json` includes the active `det_every` setting, so the dashboard shows the current detector cadence.
@@ -73,6 +76,9 @@ Use `--metrics-json ""` to disable writing the rolling metrics file.
 - Frames are annotated with stable track IDs, smoothed boxes/landmarks, match labels, and per-frame timings.
 - Track IDs are monotonic within the current server session. Unknown people still
   get track IDs so the tracker can follow them even before they match the gallery.
+- Unknown faces are auto-captured into `slop/valenia/data/gallery/_unknowns/`.
+- Promoting an unknown with an existing name merges those samples into the
+  existing identity instead of creating a duplicate.
 - With `--det-every > 1`, skipped frames reuse the last tracked boxes instead of rerunning detection.
 - By default, identity embeddings are refreshed only for new, stale, or moved tracks.
 - Uploaded photos are stored under `slop/valenia/data/gallery/<identity>/`.

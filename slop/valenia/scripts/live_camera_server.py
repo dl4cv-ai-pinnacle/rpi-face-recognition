@@ -15,6 +15,7 @@ from email.policy import default as email_default_policy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, quote, urlparse
 
 import cv2
 import numpy as np
@@ -24,7 +25,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from contracts import PipelineLike
-from gallery import EnrollmentResult, GalleryStore
+from gallery import EnrollmentResult, GalleryStore, IdentityRecord, UnknownRecord
 from live_runtime import LiveRuntime, LiveRuntimeConfig, annotate_in_place
 from pipeline_factory import PipelineSpec, build_face_pipeline, parse_size, resolve_project_path
 from runtime_utils import MemoryStats, enforce_memory_cap, get_memory_stats
@@ -135,6 +136,9 @@ HTML_PAGE = """<!doctype html>
       color: #cfead0;
       font-size: 0.8rem;
       font-weight: 600;
+    }
+    a.chip {
+      text-decoration: none;
     }
     .camera-frame {
       padding: 0.5rem;
@@ -313,6 +317,7 @@ HTML_PAGE = """<!doctype html>
             <div class="endpoint-row">
               <span class="chip">MJPEG: /stream.mjpg</span>
               <span class="chip">Metrics: /metrics.json</span>
+              <a class="chip" href="/gallery">Review Gallery</a>
             </div>
           </div>
         </div>
@@ -661,20 +666,37 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
     server_version = "ValeniaLiveCamera/0.1"
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/":
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
             self._serve_index()
             return
-        if self.path == "/stream.mjpg":
+        if parsed.path == "/gallery":
+            self._serve_gallery()
+            return
+        if parsed.path == "/gallery/image":
+            self._serve_gallery_image(parsed.query)
+            return
+        if parsed.path == "/stream.mjpg":
             self._serve_mjpeg()
             return
-        if self.path == "/metrics.json":
+        if parsed.path == "/metrics.json":
             self._serve_metrics_json()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path == "/enroll":
+        parsed = urlparse(self.path)
+        if parsed.path == "/enroll":
             self._handle_enroll()
+            return
+        if parsed.path == "/gallery/promote":
+            self._handle_gallery_promote()
+            return
+        if parsed.path == "/gallery/rename":
+            self._handle_gallery_rename()
+            return
+        if parsed.path == "/gallery/delete-unknown":
+            self._handle_gallery_delete_unknown()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -690,6 +712,36 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         body = HTML_PAGE.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_gallery(self) -> None:
+        body = _render_gallery_page(
+            identities=self.runtime.list_identities(),
+            unknowns=self.runtime.list_unknowns(),
+        ).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_gallery_image(self, query_string: str) -> None:
+        params = parse_qs(query_string, keep_blank_values=False)
+        kind = params.get("kind", [""])[0]
+        slug = params.get("slug", [""])[0]
+        filename = params.get("file", [""])[0]
+        try:
+            body, content_type = self.runtime.read_gallery_image(kind, slug, filename)
+        except ValueError as exc:
+            self.send_error(HTTPStatus.NOT_FOUND, str(exc))
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -752,6 +804,59 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             _format_enrollment_message(result),
         )
 
+    def _handle_gallery_promote(self) -> None:
+        try:
+            fields = self._parse_form_fields()
+            unknown_slug = fields.get("unknown_slug", "")
+            name = fields.get("name", "")
+            self.runtime.promote_unknown(unknown_slug, name)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Promotion failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Promotion failed",
+                str(exc),
+            )
+            return
+        self._redirect("/gallery")
+
+    def _handle_gallery_rename(self) -> None:
+        try:
+            fields = self._parse_form_fields()
+            slug = fields.get("slug", "")
+            name = fields.get("name", "")
+            self.runtime.rename_identity(slug, name)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Rename failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Rename failed",
+                str(exc),
+            )
+            return
+        self._redirect("/gallery")
+
+    def _handle_gallery_delete_unknown(self) -> None:
+        try:
+            fields = self._parse_form_fields()
+            unknown_slug = fields.get("unknown_slug", "")
+            self.runtime.delete_unknown(unknown_slug)
+        except ValueError as exc:
+            self._serve_message_page(HTTPStatus.BAD_REQUEST, "Delete failed", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - runtime path
+            self._serve_message_page(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Delete failed",
+                str(exc),
+            )
+            return
+        self._redirect("/gallery")
+
     def _parse_enroll_request(self) -> tuple[str, list[tuple[str, bytes]]]:
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
@@ -795,6 +900,25 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         if not uploads:
             raise ValueError("At least one photo is required")
         return name, uploads
+
+    def _parse_form_fields(self) -> dict[str, str]:
+        content_type = self.headers.get("Content-Type", "")
+        if "application/x-www-form-urlencoded" not in content_type:
+            raise ValueError("Expected application/x-www-form-urlencoded form data")
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length header") from exc
+        payload = self.rfile.read(max(0, content_length))
+        decoded = payload.decode("utf-8", errors="replace")
+        raw_fields = parse_qs(decoded, keep_blank_values=True)
+        return {key: values[0].strip() for key, values in raw_fields.items() if values}
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def _serve_message_page(self, status: HTTPStatus, title: str, message: str) -> None:
         body = _render_message_page(title, message).encode("utf-8")
@@ -1008,6 +1132,271 @@ def _render_message_page(title: str, message: str) -> str:
 </body>
 </html>
 """
+
+
+def _render_gallery_page(
+    *,
+    identities: list[IdentityRecord],
+    unknowns: list[UnknownRecord],
+) -> str:
+    identity_cards = "\n".join(_render_identity_card(record) for record in identities)
+    unknown_cards = "\n".join(_render_unknown_card(record) for record in unknowns)
+    if not identity_cards:
+        identity_cards = '<p class="empty">No confirmed identities yet.</p>'
+    if not unknown_cards:
+        unknown_cards = '<p class="empty">No auto-captured unknowns yet.</p>'
+
+    return f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>Valenia Gallery Review</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #0b1217;
+      --panel: #142028;
+      --border: #2f4654;
+      --text: #ecf4f3;
+      --muted: #97adb7;
+      --accent: #83d483;
+      --danger: #ef6f6c;
+    }}
+    body {{
+      margin: 0;
+      font-family: \"IBM Plex Sans\", \"Segoe UI\", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top right, rgba(84, 198, 235, 0.12), transparent 30%),
+        var(--bg);
+      min-height: 100vh;
+    }}
+    main {{
+      width: min(100%, 1380px);
+      margin: 0 auto;
+      padding: 1rem;
+      box-sizing: border-box;
+    }}
+    .hero {{
+      margin-bottom: 1rem;
+      padding: 1rem 1.1rem;
+      border-radius: 0.9rem;
+      border: 1px solid var(--border);
+      background: linear-gradient(155deg, rgba(20, 32, 40, 0.98), rgba(15, 24, 30, 0.96));
+    }}
+    .hero p {{
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 0.4rem 0 0;
+    }}
+    .hero-links {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 0.9rem;
+    }}
+    .hero-links a {{
+      color: #d8f7ad;
+      text-decoration: none;
+      font-weight: 600;
+    }}
+    .columns {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      align-items: start;
+    }}
+    .panel {{
+      padding: 1rem;
+      border-radius: 0.9rem;
+      border: 1px solid var(--border);
+      background: linear-gradient(160deg, rgba(20, 32, 40, 0.96), rgba(15, 24, 30, 0.98));
+    }}
+    .card-list {{
+      display: grid;
+      gap: 0.8rem;
+    }}
+    .card {{
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 0.9rem;
+      padding: 0.85rem;
+      border-radius: 0.8rem;
+      border: 1px solid rgba(47, 70, 84, 0.75);
+      background: rgba(255, 255, 255, 0.03);
+    }}
+    .thumb {{
+      width: 120px;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border-radius: 0.6rem;
+      border: 1px solid rgba(47, 70, 84, 0.85);
+      background: #000;
+    }}
+    .thumb.empty {{
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }}
+    .meta {{
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0.15rem 0 0.75rem;
+    }}
+    form {{
+      display: grid;
+      gap: 0.55rem;
+      margin-top: 0.6rem;
+    }}
+    input, button {{
+      font: inherit;
+    }}
+    input[type=\"text\"] {{
+      padding: 0.6rem;
+      border-radius: 0.55rem;
+      border: 1px solid var(--border);
+      background: #12212a;
+      color: var(--text);
+    }}
+    .button-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+    }}
+    button {{
+      width: fit-content;
+      padding: 0.65rem 0.95rem;
+      border-radius: 0.55rem;
+      border: 0;
+      background: linear-gradient(135deg, var(--accent), #b7ec87);
+      color: #0b1710;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    button.delete {{
+      background: rgba(239, 111, 108, 0.12);
+      color: #ffd4d2;
+      border: 1px solid rgba(239, 111, 108, 0.25);
+    }}
+    .empty {{
+      color: var(--muted);
+    }}
+    @media (max-width: 980px) {{
+      .columns {{
+        grid-template-columns: 1fr;
+      }}
+    }}
+    @media (max-width: 640px) {{
+      .card {{
+        grid-template-columns: 1fr;
+      }}
+      .thumb {{
+        width: 100%;
+        max-width: 220px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <section class=\"hero\">
+      <h1>Gallery Review</h1>
+      <p>
+        Unknown faces are auto-captured into the review inbox as <code>unknown-xxxx</code>.
+        Promote one by giving it a real name. If that name already exists, we merge the
+        unknown samples into the existing identity automatically.
+      </p>
+      <div class=\"hero-links\">
+        <a href=\"/\">Back to live camera</a>
+        <a href=\"/metrics.json\">Raw metrics JSON</a>
+      </div>
+    </section>
+    <div class=\"columns\">
+      <section class=\"panel\">
+        <h2>Confirmed Identities</h2>
+        <div class=\"card-list\">
+          {identity_cards}
+        </div>
+      </section>
+      <section class=\"panel\">
+        <h2>Unknown Review Inbox</h2>
+        <div class=\"card-list\">
+          {unknown_cards}
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
+"""
+
+
+def _render_identity_card(record: IdentityRecord) -> str:
+    name = html.escape(record.name)
+    slug = html.escape(record.slug)
+    sample_count = record.sample_count
+    preview = _render_preview_image("identity", record.slug, record.preview_filename)
+    return f"""
+<article class=\"card\">
+  {preview}
+  <div>
+    <h3>{name}</h3>
+    <p class=\"meta\">slug={slug} • samples={sample_count}</p>
+    <form action=\"/gallery/rename\" method=\"post\">
+      <input type=\"hidden\" name=\"slug\" value=\"{slug}\">
+      <label>
+        <span class=\"meta\">Rename display name</span>
+        <input type=\"text\" name=\"name\" value=\"{name}\" required>
+      </label>
+      <div class=\"button-row\">
+        <button type=\"submit\">Save Name</button>
+      </div>
+    </form>
+  </div>
+</article>
+"""
+
+
+def _render_unknown_card(record: UnknownRecord) -> str:
+    slug_raw = record.slug
+    slug = html.escape(slug_raw)
+    sample_count = record.sample_count
+    preview = _render_preview_image("unknown", slug_raw, record.preview_filename)
+    return f"""
+<article class=\"card\">
+  {preview}
+  <div>
+    <h3>{slug}</h3>
+    <p class=\"meta\">captures={sample_count}</p>
+    <form action=\"/gallery/promote\" method=\"post\">
+      <input type=\"hidden\" name=\"unknown_slug\" value=\"{slug}\">
+      <label>
+        <span class=\"meta\">Promote to name (or type an existing name to merge)</span>
+        <input type=\"text\" name=\"name\" placeholder=\"Alice\" required>
+      </label>
+      <div class=\"button-row\">
+        <button type=\"submit\">Promote to Gallery</button>
+      </div>
+    </form>
+    <form action=\"/gallery/delete-unknown\" method=\"post\">
+      <input type=\"hidden\" name=\"unknown_slug\" value=\"{slug}\">
+      <div class=\"button-row\">
+        <button class=\"delete\" type=\"submit\">Discard</button>
+      </div>
+    </form>
+  </div>
+</article>
+"""
+
+
+def _render_preview_image(kind: str, slug: str, filename: object) -> str:
+    if not isinstance(filename, str) or not filename:
+        return '<div class="thumb empty">No preview</div>'
+    url = "/gallery/image?kind=" + quote(kind) + "&slug=" + quote(slug) + "&file=" + quote(filename)
+    alt = html.escape(f"{kind} preview")
+    return f'<img class="thumb" src="{url}" alt="{alt}">'
 
 
 def _format_enrollment_message(result: EnrollmentResult) -> str:

@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from contracts import GalleryLike, PipelineLike
-from gallery import EnrollmentResult, GalleryMatch
+from gallery import EnrollmentResult, GalleryMatch, IdentityRecord, UnknownRecord
 from runtime_utils import (
     CpuUsageSampler,
     Float32Array,
@@ -380,6 +380,24 @@ class LiveRuntime:
     def enroll(self, name: str, uploads: list[tuple[str, bytes]]) -> EnrollmentResult:
         return self.gallery.enroll(name, uploads, self.pipeline)
 
+    def list_identities(self) -> list[IdentityRecord]:
+        return self.gallery.identities()
+
+    def list_unknowns(self) -> list[UnknownRecord]:
+        return self.gallery.unknowns()
+
+    def rename_identity(self, slug: str, new_name: str) -> IdentityRecord:
+        return self.gallery.rename_identity(slug, new_name)
+
+    def promote_unknown(self, unknown_slug: str, name: str) -> EnrollmentResult:
+        return self.gallery.promote_unknown(unknown_slug, name)
+
+    def delete_unknown(self, unknown_slug: str) -> None:
+        self.gallery.delete_unknown(unknown_slug)
+
+    def read_gallery_image(self, kind: str, slug: str, filename: str) -> tuple[bytes, str]:
+        return self.gallery.read_image(kind, slug, filename)
+
     def process_frame(self, frame_bgr: UInt8Array) -> LiveRuntimeFrameResult:
         self._frame_counter += 1
         track_t0 = time.perf_counter()
@@ -415,6 +433,10 @@ class LiveRuntime:
                 embed_ms_total += emb_ms
                 refreshes += 1
                 match = self.gallery.match(emb, self.config.match_threshold)
+                if not match.matched:
+                    crop = _crop_face_region(frame_bgr, track.box)
+                    if crop is not None:
+                        match = self.gallery.capture_unknown(emb, crop)
                 self._track_states[track.track_id] = TrackIdentityState(
                     match=match,
                     last_embed_frame=self._frame_counter,
@@ -521,7 +543,8 @@ def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
         if face.match is not None and face.match.matched and face.match.name is not None:
             label = f"track={track.track_id} {face.match.name} {face.match.score:.2f}"
         elif face.match is not None:
-            label = f"track={track.track_id} unknown"
+            unknown_label = face.match.name if face.match.name is not None else "unknown"
+            label = f"track={track.track_id} {unknown_label}"
         if not track.matched:
             label = f"{label} hold"
         cv2.putText(
@@ -564,6 +587,20 @@ def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
         (0, 0, 0),
         1,
     )
+
+
+def _crop_face_region(frame_bgr: UInt8Array, box: Float32Array) -> UInt8Array | None:
+    height, width = frame_bgr.shape[:2]
+    x1 = max(0, int(np.floor(float(box[0]))))
+    y1 = max(0, int(np.floor(float(box[1]))))
+    x2 = min(width, int(np.ceil(float(box[2]))))
+    y2 = min(height, int(np.ceil(float(box[3]))))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    crop = frame_bgr[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+    return np.asarray(crop, dtype=np.uint8)
 
 
 def _box_iou(box_a: Float32Array, box_b: Float32Array) -> float:

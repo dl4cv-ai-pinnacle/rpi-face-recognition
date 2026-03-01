@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from contracts import DetectionLike, FrameResultLike
-from gallery import EnrollmentResult, GalleryMatch
+from gallery import EnrollmentResult, GalleryMatch, IdentityRecord, UnknownRecord
 from live_runtime import LiveRuntime, LiveRuntimeConfig
 from runtime_utils import Float32Array, MemoryStats, UInt8Array
 
@@ -68,9 +68,20 @@ class StubPipeline:
 
 
 class StubGallery:
-    def __init__(self, *, count_value: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        count_value: int = 1,
+        match_name: str | None = "alice",
+        match_slug: str | None = "alice",
+        matched: bool = True,
+    ) -> None:
         self._count_value = count_value
+        self._match_name = match_name
+        self._match_slug = match_slug
+        self._matched = matched
         self.match_calls = 0
+        self.capture_unknown_calls = 0
 
     def enroll(
         self,
@@ -90,10 +101,53 @@ class StubGallery:
     def match(self, embedding: Float32Array, threshold: float) -> GalleryMatch:
         del embedding, threshold
         self.match_calls += 1
-        return GalleryMatch(name="alice", slug="alice", score=0.99, matched=True)
+        return GalleryMatch(
+            name=self._match_name,
+            slug=self._match_slug,
+            score=0.99,
+            matched=self._matched,
+        )
+
+    def capture_unknown(self, embedding: Float32Array, crop_bgr: UInt8Array) -> GalleryMatch:
+        del embedding, crop_bgr
+        self.capture_unknown_calls += 1
+        return GalleryMatch(name="unknown-0001", slug="unknown-0001", score=0.0, matched=False)
 
     def count(self) -> int:
         return self._count_value
+
+    def identities(self) -> list[IdentityRecord]:
+        return []
+
+    def unknowns(self) -> list[UnknownRecord]:
+        return []
+
+    def rename_identity(self, slug: str, new_name: str) -> IdentityRecord:
+        del new_name
+        return IdentityRecord(
+            name=slug,
+            slug=slug,
+            template=np.zeros((3,), dtype=np.float32),
+            sample_count=1,
+            preview_filename=None,
+        )
+
+    def promote_unknown(self, unknown_slug: str, name: str) -> EnrollmentResult:
+        del unknown_slug
+        return EnrollmentResult(
+            name=name,
+            slug="person",
+            accepted_files=("capture_001.jpg",),
+            rejected_files=(),
+            sample_count=1,
+        )
+
+    def delete_unknown(self, unknown_slug: str) -> None:
+        del unknown_slug
+
+    def read_image(self, kind: str, slug: str, filename: str) -> tuple[bytes, str]:
+        del kind, slug, filename
+        return b"123", "image/jpeg"
 
 
 def build_runtime(
@@ -221,6 +275,19 @@ def test_live_runtime_metrics_snapshot_reports_det_every() -> None:
     assert snapshot["current_fps"] == 125.0
     assert snapshot["accelerator_mode"] == "cpu-only (ONNX Runtime CPUExecutionProvider)"
     assert snapshot["last_error"] == "camera disconnected"
+
+
+def test_live_runtime_auto_captures_unknown_faces() -> None:
+    pipeline = StubPipeline([make_detection()])
+    gallery = StubGallery(match_name=None, match_slug=None, matched=False)
+    runtime = build_runtime(pipeline, gallery)
+
+    frame_result = runtime.process_frame(make_frame())
+
+    assert frame_result.refreshes == 1
+    assert gallery.capture_unknown_calls == 1
+    assert frame_result.overlay.faces[0].match is not None
+    assert frame_result.overlay.faces[0].match.name == "unknown-0001"
 
 
 def test_live_runtime_enroll_delegates_to_gallery() -> None:

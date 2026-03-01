@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Protocol
 from runtime_utils import Float32Array, UInt8Array
 
 if TYPE_CHECKING:
-    from gallery import EnrollmentResult, GalleryMatch
+    from gallery import EnrollmentResult, GalleryMatch, IdentityRecord, UnknownRecord
 
 
 class DetectionLike(Protocol):
@@ -94,6 +94,34 @@ class GalleryLike(Protocol):
 
     def count(self) -> int:
         """Return the number of enrolled identities."""
+        ...
+
+    def capture_unknown(self, embedding: Float32Array, crop_bgr: UInt8Array, /) -> GalleryMatch:
+        """Store or update an unknown face candidate and return its review label."""
+        ...
+
+    def identities(self) -> list[IdentityRecord]:
+        """Return confirmed identities for review pages."""
+        ...
+
+    def unknowns(self) -> list[UnknownRecord]:
+        """Return pending unknown captures."""
+        ...
+
+    def rename_identity(self, slug: str, new_name: str, /) -> IdentityRecord:
+        """Update the display name for an existing identity."""
+        ...
+
+    def promote_unknown(self, unknown_slug: str, name: str, /) -> EnrollmentResult:
+        """Promote a pending unknown into the confirmed gallery."""
+        ...
+
+    def delete_unknown(self, unknown_slug: str, /) -> None:
+        """Delete a pending unknown review item."""
+        ...
+
+    def read_image(self, kind: str, slug: str, filename: str, /) -> tuple[bytes, str]:
+        """Read a preview image for the review UI."""
         ...
 
 

@@ -115,7 +115,8 @@ Then open `http://<pi-ip>:8000/` from another device on the same network.
 The page keeps the camera feed on the left, with enrollment and a live metrics
 dashboard on the right. The dashboard surfaces FPS, CPU load, SoC temperature,
 memory, detector cadence, and the raw metrics snapshot remains available at
-`http://<pi-ip>:8000/metrics.json`.
+`http://<pi-ip>:8000/metrics.json`. Unknown faces are auto-captured into a review
+inbox and can be promoted from `http://<pi-ip>:8000/gallery`.
 Detailed notes: `slop/valenia/docs/LIVE_CAMERA_SERVER.md`
 
 ## Notes
