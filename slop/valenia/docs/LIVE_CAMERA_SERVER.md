@@ -20,6 +20,7 @@ rpicam-hello --list-cameras
 
 ```bash
 python3 slop/valenia/scripts/live_camera_server.py \
+  --det-every 1 \
   --track-max-missed 3 \
   --track-iou-thresh 0.3 \
   --track-smoothing 0.65 \
@@ -49,10 +50,13 @@ python3 slop/valenia/scripts/live_camera_server.py \
   --height 480 \
   --fps 8 \
   --jpeg-quality 80 \
+  --det-every 2 \
   --ram-cap-mb 4096
 ```
 
 Other model and detector flags match the existing benchmark script defaults.
+Use `--det-every 2` or `--det-every 3` to reduce detector load by holding the
+last tracked boxes between detection passes.
 Use `--disable-embed-refresh` to force the older behavior and recompute face
 embeddings on every fresh tracked frame.
 Use `--metrics-json ""` to disable writing the rolling metrics file.
@@ -61,6 +65,7 @@ Use `--metrics-json ""` to disable writing the rolling metrics file.
 
 - The capture loop keeps only the latest encoded JPEG in memory, so clients do not build up frame queues.
 - Frames are annotated with stable track IDs, smoothed boxes/landmarks, match labels, and per-frame timings.
+- With `--det-every > 1`, skipped frames reuse the last tracked boxes instead of rerunning detection.
 - By default, identity embeddings are refreshed only for new, stale, or moved tracks.
 - Uploaded photos are stored under `slop/valenia/data/gallery/<identity>/`.
 - Rolling live metrics are written to `slop/valenia/data/metrics/live_camera_metrics.json` by default.

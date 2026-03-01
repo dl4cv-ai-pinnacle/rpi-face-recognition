@@ -478,6 +478,7 @@ def build_runtime(args: argparse.Namespace, pipeline: FacePipeline) -> LiveRunti
     metrics_json_path = ROOT / args.metrics_json if args.metrics_json else None
     config = LiveRuntimeConfig(
         max_faces=args.max_faces,
+        det_every=args.det_every,
         track_iou_thresh=args.track_iou_thresh,
         track_max_missed=args.track_max_missed,
         track_smoothing=args.track_smoothing,
@@ -504,6 +505,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=float, default=8.0)
     parser.add_argument("--jpeg-quality", type=int, default=80)
+    parser.add_argument(
+        "--det-every",
+        type=int,
+        default=1,
+        help="Run detector every N frames; values <1 are treated as 1",
+    )
     parser.add_argument(
         "--track-max-missed",
         type=int,

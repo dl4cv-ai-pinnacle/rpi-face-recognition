@@ -81,7 +81,9 @@ uv run --project slop/valenia --group dev pre-commit run \
 
 ```bash
 rpicam-hello --list-cameras
-python3 slop/valenia/scripts/live_camera_server.py --ram-cap-mb 4096
+python3 slop/valenia/scripts/live_camera_server.py \
+  --det-every 2 \
+  --ram-cap-mb 4096
 ```
 
 Then open `http://<pi-ip>:8000/` from another device on the same network.

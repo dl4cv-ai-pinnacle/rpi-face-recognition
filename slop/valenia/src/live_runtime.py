@@ -19,6 +19,7 @@ from tracking import SimpleFaceTracker, Track
 @dataclass(frozen=True)
 class LiveRuntimeConfig:
     max_faces: int
+    det_every: int
     track_iou_thresh: float
     track_max_missed: int
     track_smoothing: float
@@ -261,6 +262,7 @@ class LiveRuntime:
             max_missed=config.track_max_missed,
             smoothing=config.track_smoothing,
         )
+        self._last_tracks: list[Track] = []
         self._track_states: dict[int, TrackIdentityState] = {}
         self._metrics = LiveMetricsCollector(
             metrics_json_path=config.metrics_json_path,
@@ -277,9 +279,14 @@ class LiveRuntime:
 
     def process_frame(self, frame_bgr: UInt8Array) -> LiveRuntimeFrameResult:
         self._frame_counter += 1
-        det, detect_ms = self.pipeline.detect(frame_bgr)
         track_t0 = time.perf_counter()
-        tracks = self._tracker.update(det.boxes, det.kps, max_tracks=self.config.max_faces)
+        detect_ms = 0.0
+        if self._should_run_detection():
+            det, detect_ms = self.pipeline.detect(frame_bgr)
+            tracks = self._tracker.update(det.boxes, det.kps, max_tracks=self.config.max_faces)
+            self._last_tracks = list(tracks)
+        else:
+            tracks = self._build_held_tracks()
         track_ms = (time.perf_counter() - track_t0) * 1000.0
 
         live_ids = {track.track_id for track in tracks}
@@ -365,6 +372,26 @@ class LiveRuntime:
 
         current_box = np.asarray(track.box, dtype=np.float32)
         return _box_iou(current_box[:4], state.last_embed_box[:4]) < self.config.embed_refresh_iou
+
+    def _should_run_detection(self) -> bool:
+        interval = max(1, int(self.config.det_every))
+        return ((self._frame_counter - 1) % interval) == 0
+
+    def _build_held_tracks(self) -> list[Track]:
+        held_tracks: list[Track] = []
+        for track in self._last_tracks:
+            held_tracks.append(
+                Track(
+                    track_id=track.track_id,
+                    box=np.asarray(track.box, dtype=np.float32),
+                    kps=None if track.kps is None else np.asarray(track.kps, dtype=np.float32),
+                    age=track.age + 1,
+                    hits=track.hits,
+                    missed=track.missed,
+                    matched=False,
+                )
+            )
+        return held_tracks
 
 
 def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
