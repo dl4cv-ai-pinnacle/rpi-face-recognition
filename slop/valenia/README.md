@@ -112,8 +112,10 @@ python3 slop/valenia/scripts/live_camera_server.py \
 ```
 
 Then open `http://<pi-ip>:8000/` from another device on the same network.
-The page includes a simple photo upload form for enrolling named identities.
-It also shows live metrics, mirrored at `http://<pi-ip>:8000/metrics.json`.
+The page keeps the camera feed on the left, with enrollment and a live metrics
+dashboard on the right. The dashboard surfaces FPS, CPU load, SoC temperature,
+memory, detector cadence, and the raw metrics snapshot remains available at
+`http://<pi-ip>:8000/metrics.json`.
 Detailed notes: `slop/valenia/docs/LIVE_CAMERA_SERVER.md`
 
 ## Notes

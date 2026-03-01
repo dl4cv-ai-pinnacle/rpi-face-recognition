@@ -12,7 +12,13 @@ import cv2
 import numpy as np
 from contracts import GalleryLike, PipelineLike
 from gallery import EnrollmentResult, GalleryMatch
-from runtime_utils import Float32Array, MemoryStats, UInt8Array
+from runtime_utils import (
+    CpuUsageSampler,
+    Float32Array,
+    MemoryStats,
+    UInt8Array,
+    get_system_stats,
+)
 from tracking import SimpleFaceTracker, Track
 
 
@@ -68,19 +74,36 @@ class LiveMetricsSnapshot:
     uptime_seconds: float
     frames_processed: int
     det_every: int
+    current_fps: float
     avg_fps: float
+    last_loop_ms: float
     avg_loop_ms: float
+    last_detect_ms: float
     avg_detect_ms: float
+    last_track_ms: float
     avg_track_ms: float
+    last_embed_ms: float
     avg_embed_ms: float
+    last_faces: int
     avg_faces_per_frame: float
+    last_fresh_tracks: int
     avg_fresh_tracks_per_frame: float
+    last_recognized_faces: int
     avg_recognized_faces_per_frame: float
+    last_refreshes: int
     avg_refreshes_per_frame: float
+    last_reuses: int
     avg_reuses_per_frame: float
     gallery_size: int
+    cpu_usage_pct: float
+    loadavg_1m: float
+    loadavg_5m: float
+    loadavg_15m: float
+    cpu_temp_c: float | None
+    gpu_usage_pct: float | None
     current_rss_mb: float
     peak_rss_mb: float
+    accelerator_mode: str
     embed_refresh_enabled: bool
     metrics_json_path: str | None
     last_error: str | None
@@ -91,19 +114,36 @@ class LiveMetricsSnapshot:
             "uptime_seconds": round(self.uptime_seconds, 3),
             "frames_processed": self.frames_processed,
             "det_every": self.det_every,
+            "current_fps": round(self.current_fps, 3),
             "avg_fps": round(self.avg_fps, 3),
+            "last_loop_ms": round(self.last_loop_ms, 3),
             "avg_loop_ms": round(self.avg_loop_ms, 3),
+            "last_detect_ms": round(self.last_detect_ms, 3),
             "avg_detect_ms": round(self.avg_detect_ms, 3),
+            "last_track_ms": round(self.last_track_ms, 3),
             "avg_track_ms": round(self.avg_track_ms, 3),
+            "last_embed_ms": round(self.last_embed_ms, 3),
             "avg_embed_ms": round(self.avg_embed_ms, 3),
+            "last_faces": self.last_faces,
             "avg_faces_per_frame": round(self.avg_faces_per_frame, 3),
+            "last_fresh_tracks": self.last_fresh_tracks,
             "avg_fresh_tracks_per_frame": round(self.avg_fresh_tracks_per_frame, 3),
+            "last_recognized_faces": self.last_recognized_faces,
             "avg_recognized_faces_per_frame": round(self.avg_recognized_faces_per_frame, 3),
+            "last_refreshes": self.last_refreshes,
             "avg_refreshes_per_frame": round(self.avg_refreshes_per_frame, 3),
+            "last_reuses": self.last_reuses,
             "avg_reuses_per_frame": round(self.avg_reuses_per_frame, 3),
             "gallery_size": self.gallery_size,
+            "cpu_usage_pct": round(self.cpu_usage_pct, 3),
+            "loadavg_1m": round(self.loadavg_1m, 3),
+            "loadavg_5m": round(self.loadavg_5m, 3),
+            "loadavg_15m": round(self.loadavg_15m, 3),
+            "cpu_temp_c": None if self.cpu_temp_c is None else round(self.cpu_temp_c, 3),
+            "gpu_usage_pct": None if self.gpu_usage_pct is None else round(self.gpu_usage_pct, 3),
             "current_rss_mb": round(self.current_rss_mb, 3),
             "peak_rss_mb": round(self.peak_rss_mb, 3),
+            "accelerator_mode": self.accelerator_mode,
             "embed_refresh_enabled": self.embed_refresh_enabled,
             "metrics_json_path": self.metrics_json_path,
             "last_error": self.last_error,
@@ -138,28 +178,56 @@ class LiveMetricsCollector:
         self._sum_refreshes = 0
         self._sum_reuses = 0
         self._last_error: str | None = None
+        self._last_loop_ms = 0.0
+        self._last_detect_ms = 0.0
+        self._last_track_ms = 0.0
+        self._last_embed_ms = 0.0
+        self._last_faces = 0
+        self._last_fresh_tracks = 0
+        self._last_recognized_faces = 0
+        self._last_refreshes = 0
+        self._last_reuses = 0
+        self._cpu_sampler = CpuUsageSampler()
         path_str = None
         if self.metrics_json_path is not None:
             self.metrics_json_path.parent.mkdir(parents=True, exist_ok=True)
             path_str = str(self.metrics_json_path)
+        system = get_system_stats(self._cpu_sampler)
         self._snapshot = LiveMetricsSnapshot(
             updated_at_epoch=time.time(),
             uptime_seconds=0.0,
             frames_processed=0,
             det_every=self.det_every,
+            current_fps=0.0,
             avg_fps=0.0,
+            last_loop_ms=0.0,
             avg_loop_ms=0.0,
+            last_detect_ms=0.0,
             avg_detect_ms=0.0,
+            last_track_ms=0.0,
             avg_track_ms=0.0,
+            last_embed_ms=0.0,
             avg_embed_ms=0.0,
+            last_faces=0,
             avg_faces_per_frame=0.0,
+            last_fresh_tracks=0,
             avg_fresh_tracks_per_frame=0.0,
+            last_recognized_faces=0,
             avg_recognized_faces_per_frame=0.0,
+            last_refreshes=0,
             avg_refreshes_per_frame=0.0,
+            last_reuses=0,
             avg_reuses_per_frame=0.0,
             gallery_size=0,
+            cpu_usage_pct=system.cpu_usage_pct,
+            loadavg_1m=system.loadavg_1m,
+            loadavg_5m=system.loadavg_5m,
+            loadavg_15m=system.loadavg_15m,
+            cpu_temp_c=system.cpu_temp_c,
+            gpu_usage_pct=system.gpu_usage_pct,
             current_rss_mb=0.0,
             peak_rss_mb=0.0,
+            accelerator_mode="cpu-only (ONNX Runtime CPUExecutionProvider)",
             embed_refresh_enabled=self.embed_refresh_enabled,
             metrics_json_path=path_str,
             last_error=None,
@@ -186,6 +254,15 @@ class LiveMetricsCollector:
             self._sum_recognized_faces += frame_result.recognized_faces
             self._sum_refreshes += frame_result.refreshes
             self._sum_reuses += frame_result.reuses
+            self._last_loop_ms = loop_ms
+            self._last_detect_ms = frame_result.overlay.detect_ms
+            self._last_track_ms = frame_result.overlay.track_ms
+            self._last_embed_ms = frame_result.overlay.embed_ms_total
+            self._last_faces = len(frame_result.overlay.faces)
+            self._last_fresh_tracks = frame_result.fresh_tracks
+            self._last_recognized_faces = frame_result.recognized_faces
+            self._last_refreshes = frame_result.refreshes
+            self._last_reuses = frame_result.reuses
             snapshot = self._build_snapshot_locked(
                 gallery_size=frame_result.overlay.gallery_size,
                 memory=memory,
@@ -217,25 +294,44 @@ class LiveMetricsCollector:
         uptime = max(0.0, time.perf_counter() - self._start_mono)
         avg_loop_ms = self._sum_loop_ms / frames if frames else 0.0
         avg_fps = (1000.0 / avg_loop_ms) if avg_loop_ms > 0.0 else 0.0
+        current_fps = (1000.0 / self._last_loop_ms) if self._last_loop_ms > 0.0 else 0.0
         path_str = str(self.metrics_json_path) if self.metrics_json_path is not None else None
+        system = get_system_stats(self._cpu_sampler)
         return LiveMetricsSnapshot(
             updated_at_epoch=time.time(),
             uptime_seconds=uptime,
             frames_processed=frames,
             det_every=self.det_every,
+            current_fps=current_fps,
             avg_fps=avg_fps,
+            last_loop_ms=self._last_loop_ms,
             avg_loop_ms=avg_loop_ms,
+            last_detect_ms=self._last_detect_ms,
             avg_detect_ms=(self._sum_detect_ms / frames) if frames else 0.0,
+            last_track_ms=self._last_track_ms,
             avg_track_ms=(self._sum_track_ms / frames) if frames else 0.0,
+            last_embed_ms=self._last_embed_ms,
             avg_embed_ms=(self._sum_embed_ms / frames) if frames else 0.0,
+            last_faces=self._last_faces,
             avg_faces_per_frame=(self._sum_faces / frames) if frames else 0.0,
+            last_fresh_tracks=self._last_fresh_tracks,
             avg_fresh_tracks_per_frame=(self._sum_fresh_tracks / frames) if frames else 0.0,
+            last_recognized_faces=self._last_recognized_faces,
             avg_recognized_faces_per_frame=(self._sum_recognized_faces / frames if frames else 0.0),
+            last_refreshes=self._last_refreshes,
             avg_refreshes_per_frame=(self._sum_refreshes / frames) if frames else 0.0,
+            last_reuses=self._last_reuses,
             avg_reuses_per_frame=(self._sum_reuses / frames) if frames else 0.0,
             gallery_size=gallery_size,
+            cpu_usage_pct=system.cpu_usage_pct,
+            loadavg_1m=system.loadavg_1m,
+            loadavg_5m=system.loadavg_5m,
+            loadavg_15m=system.loadavg_15m,
+            cpu_temp_c=system.cpu_temp_c,
+            gpu_usage_pct=system.gpu_usage_pct,
             current_rss_mb=memory.current_rss_mb,
             peak_rss_mb=memory.peak_rss_mb,
+            accelerator_mode="cpu-only (ONNX Runtime CPUExecutionProvider)",
             embed_refresh_enabled=self.embed_refresh_enabled,
             metrics_json_path=path_str,
             last_error=self._last_error,
@@ -421,11 +517,13 @@ def annotate_in_place(frame_bgr: UInt8Array, overlay: TrackingOverlay) -> None:
             color=color,
             thickness=2,
         )
-        label = f"id={track.track_id} {score:.2f}"
+        label = f"track={track.track_id} conf={score:.2f}"
+        if face.match is not None and face.match.matched and face.match.name is not None:
+            label = f"track={track.track_id} {face.match.name} {face.match.score:.2f}"
+        elif face.match is not None:
+            label = f"track={track.track_id} unknown"
         if not track.matched:
             label = f"{label} hold"
-        elif face.match is not None and face.match.matched and face.match.name is not None:
-            label = f"{label} {face.match.name} {face.match.score:.2f}"
         cv2.putText(
             frame_bgr,
             label,

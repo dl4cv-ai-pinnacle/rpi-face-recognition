@@ -218,6 +218,8 @@ def test_live_runtime_metrics_snapshot_reports_det_every() -> None:
     snapshot = runtime.metrics_snapshot
     assert snapshot["det_every"] == 3
     assert snapshot["frames_processed"] == 1
+    assert snapshot["current_fps"] == 125.0
+    assert snapshot["accelerator_mode"] == "cpu-only (ONNX Runtime CPUExecutionProvider)"
     assert snapshot["last_error"] == "camera disconnected"
 
 
