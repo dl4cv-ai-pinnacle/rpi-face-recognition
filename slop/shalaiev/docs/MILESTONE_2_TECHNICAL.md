@@ -1,122 +1,95 @@
 # Technical Overview — Implemented Computer Vision Pipeline
 
-This document describes the computer vision techniques and architectural decisions behind the implemented Butler face recognition pipeline. Where the initial project idea (PROJECT_IDEA.md) surveyed the landscape of possible approaches, this document focuses on what was actually built, why each technique was chosen, and how the components interact.
+This document covers the computer vision techniques and architectural decisions behind the Butler face recognition pipeline. 
 
-## Face detection with SCRFD-500M
+**Note**: The current version of each of the pipelines is different for each of the team members. We decided to seprately build an independent end-to-end implementation, and after the group review, the strongest components will be merged in later milestones.
 
-The detection stage uses **SCRFD-500M (Sample and Computation Redistribution for Face Detection)**, an anchor-free detector from the InsightFace project that represents a significant architectural advance over the cascade-based MTCNN and SSD-based UltraFace alternatives surveyed in the initial design.
+## Pipeline Overview
 
-SCRFD's key innovation is its **computation redistribution strategy**. Rather than uniformly distributing computation across all feature pyramid levels (as RetinaFace does), SCRFD analyzes where compute is most valuable through neural architecture search and reallocates FLOPs toward the scales where faces are most commonly found. The "500M" variant operates at 500 MFLOPs — roughly equivalent to UltraFace in computational budget — but achieves dramatically higher accuracy by spending those FLOPs more efficiently.
 
-The model operates on the **WIDER FACE benchmark** hierarchy, where detection difficulty increases from "Easy" (large, unoccluded, well-lit faces) through "Medium" to "Hard" (tiny, occluded, or extreme-pose faces):
+| Stage                   | Component                                        | Implementation                                                                    |
+| ----------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| 1. Frame Capture        | Picamera2                                        | RGB888 at 640x480, downscaled to 320x240 for detection                            |
+| 2. Face Detection       | SCRFD-500M (primary) / UltraFace-slim (fallback) | Swappable via `FaceDetector` protocol; coordinates mapped to original frame space |
+| 3. Face Alignment       | ArcFace 5-point transform                        | Similarity transform from detected landmarks → 112x112 normalized crop            |
+| 4. Embedding Extraction | MobileFaceNet (`w600k_mbf.onnx`)                 | 512-dim L2-normalized vectors via ONNX Runtime                                    |
+| 5. Matching & Storage   | FAISS `IndexFlatIP` + SQLite                     | Cosine similarity search + identity metadata                                      |
+| 6. Display & HUD        | OpenCV window                                    | Bounding boxes, landmarks, identity labels, confidence, FPS overlay               |
 
-| Detector | WIDER Easy | WIDER Medium | WIDER Hard | FPS (RPi 5) |
-|----------|-----------|-------------|-----------|-------------|
-| SCRFD-500M | 90.57% | 88.12% | 68.51% | ~20 |
-| UltraFace-slim | ~77% | ~67% | ~32% | ~65 |
-| MTCNN | ~85% | ~82% | ~60% | 1-5 |
 
-SCRFD-500M was selected as the primary detector because it operates at the accuracy level needed for reliable landmark extraction — a prerequisite for downstream face alignment. UltraFace-slim remains available as a high-speed fallback, though it produces bounding boxes without landmarks, which prevents the recognition pipeline from running.
+## Stage 1 — Frame Capture
 
-Both detectors implement a common `FaceDetector` protocol, accepting RGB frames and returning detections in the input frame's coordinate space. The protocol-based design allows runtime switching via environment configuration without code changes.
+The camera captures at **640x480** (configurable) in continuous video mode using Picamera2 with the libcamera backend. Detection runs at a reduced **320x240** resolution for performance. Each detector handles coordinate remapping internally — SCRFD via inverse scale factors, UltraFace via normalized `[0,1]` coordinates — so all downstream stages operate exclusively in original-frame pixel space.
 
-## Multi-resolution coordinate mapping
+## Stage 2 — Face Detection (SCRFD-500M)
 
-The camera captures at **640x480** but face detection runs at a reduced resolution (typically **320x240**) for performance. This creates a coordinate space mismatch that the pipeline must resolve transparently.
+**Why SCRFD-500M**: At 500 MFLOPs (comparable budget to UltraFace), SCRFD achieves significantly higher accuracy through computation redistribution — reallocating FLOPs via neural architecture search to the feature pyramid levels where faces are most commonly found. Critically, it provides 5-point facial landmarks required for alignment, which UltraFace lacks.
 
-The mapping strategy differs by detector architecture:
 
-**SCRFD (via insightface)** handles resolution internally. The `FaceAnalysis.get()` method receives the full-resolution frame, resizes it to the configured detection size, runs inference, and maps all output coordinates — bounding boxes and landmarks — back to the original frame's pixel space using the inverse scale factors. The caller receives detection results that can be drawn directly on the original frame without any manual transformation.
+| Detector       | WIDER Easy | WIDER Medium | WIDER Hard | FPS (RPi 5) | Landmarks |
+| -------------- | ---------- | ------------ | ---------- | ----------- | --------- |
+| SCRFD-500M     | 90.57%     | 88.12%       | 68.51%     | ~20         | Yes       |
+| UltraFace-slim | ~77%       | ~67%         | ~32%       | ~65         | No        |
+| MTCNN          | ~85%       | ~82%         | ~60%       | 1-5         | Yes       |
 
-**UltraFace** outputs **normalized coordinates** in the `[0, 1]` range, where `(0, 0)` is the top-left corner and `(1, 1)` is the bottom-right of whatever image the model processed. This normalization is architecture-inherent: the SSD-style anchor boxes are defined in normalized space relative to the feature map. To obtain pixel coordinates in the original 640x480 frame, the pipeline multiplies by the original dimensions directly:
 
-```
-x_pixel = x_normalized × original_width
-y_pixel = y_normalized × original_height
-```
+UltraFace-slim remains as a high-speed fallback for detection-only use cases. Both detectors implement a shared `FaceDetector` protocol, allowing runtime switching via environment configuration (`FACE_DETECTOR=scrfd|ultraface`).
 
-This bypasses the intermediate detection resolution entirely — the normalized coordinates describe proportional positions within the image content, not pixel offsets within the 320x240 tensor.
+## Stage 3 — Face Alignment (ArcFace 5-Point Transform)
 
-The result is that all downstream stages (alignment, display, enrollment) operate exclusively in original-frame pixel coordinates without awareness of the detection resolution.
+Raw bounding-box crops contain arbitrary rotation, scale, and translation — variation that either wastes embedding model capacity or degrades matching accuracy. The pipeline applies **standard ArcFace 5-point alignment**: a similarity transform (rotation + uniform scale + translation) computed via `cv2.estimateAffinePartial2D` from detected landmarks (eyes, nose, mouth corners) to a canonical 112x112 reference template.
 
-## ArcFace alignment from detected landmarks
+This normalization reduces intra-identity embedding variation by approximately 40-60%, directly improving recognition accuracy at any threshold. When landmarks are unavailable (UltraFace detections), recognition is skipped — unaligned embeddings would produce unreliable matches.
 
-Face recognition accuracy depends critically on geometric normalization. Raw face crops from bounding boxes contain arbitrary rotation, scale, and translation — variations that the embedding model must either learn to ignore (wasting model capacity) or that must be removed through alignment.
+## Stage 4 — Embedding Extraction (MobileFaceNet)
 
-The pipeline implements **standard ArcFace 5-point alignment**, which transforms detected landmark positions to a canonical reference template. The five landmarks are, in order: left eye center, right eye center, nose tip, left mouth corner, and right mouth corner. The reference template defines their expected positions in a 112x112 output image:
+**Why MobileFaceNet**: Achieves 99.55% LFW accuracy with only 0.99M parameters, making it well-suited for edge inference. Three architectural features enable this efficiency: depthwise separable convolutions (~8-9x compute reduction over standard convolutions), inverted residual bottleneck blocks (MobileNetV2-style expand-process-compress with low-bandwidth residual connections), and Global Depthwise Convolution replacing average pooling with learned spatial attention that emphasizes identity-rich regions (eyes, nose bridge).
 
-| Landmark | Template X | Template Y |
-|----------|-----------|-----------|
-| Left eye | 38.29 | 51.70 |
-| Right eye | 73.53 | 51.50 |
-| Nose tip | 56.03 | 71.74 |
-| Left mouth | 41.55 | 92.37 |
-| Right mouth | 70.73 | 92.20 |
 
-The alignment computes a **similarity transform** (rotation + uniform scale + translation) from the detected landmarks to the template using `cv2.estimateAffinePartial2D`. This 4-degree-of-freedom transform preserves facial proportions while normalizing pose. The resulting 2x3 affine matrix is applied via `cv2.warpAffine` to produce a 112x112 aligned face crop.
+| Property      | Value                                            |
+| ------------- | ------------------------------------------------ |
+| Model         | `w600k_mbf.onnx` (InsightFace buffalo_sc pack)   |
+| Input         | 112x112 aligned crop, BGR, normalized to [-1, 1] |
+| Output        | 512-dim L2-normalized vector                     |
+| Training data | WebFace600K (600K identities, ~10M images)       |
+| Loss          | ArcFace                                          |
+| LFW accuracy  | 99.55%                                           |
+| Parameters    | 0.99M                                            |
+| Inference     | ONNX Runtime (CPU)                               |
 
-This alignment is essential for the embedding model's discriminative power. Without it, the same person at different head angles produces embeddings that may differ more than two different people photographed at the same angle. With alignment, intra-identity variation drops by approximately 40-60%, directly improving recognition accuracy at any given threshold.
 
-When landmarks are unavailable (as with UltraFace detections), alignment cannot be performed and the recognition pipeline is skipped for that detection. This is a deliberate design choice — attempting recognition on unaligned faces would produce unreliable embeddings that could cause false matches.
+L2 normalization projects embeddings onto a unit hypersphere where cosine similarity equals the dot product, enabling efficient similarity computation downstream.
 
-## Embedding extraction with MobileFaceNet
+## Stage 5 — Matching & Storage (FAISS + SQLite)
 
-The aligned 112x112 face crops are processed by **MobileFaceNet** (`w600k_mbf.onnx` from the InsightFace buffalo_sc model pack) to produce **512-dimensional L2-normalized embedding vectors**. The model was trained on the **WebFace600K** dataset (600,000 identities, ~10M images) using ArcFace loss.
+The face database uses **FAISS** for vector similarity search and **SQLite** for identity metadata (names, enrollment timestamps), cleanly separating numerical and relational concerns.
 
-MobileFaceNet's architecture combines three efficiency innovations relevant to edge deployment:
+FAISS uses `IndexFlatIP` (exact inner product), which equals cosine similarity for L2-normalized vectors. At the expected scale (tens of identities, hundreds of embeddings), exact search provides sub-millisecond latency — approximate indices like `IndexIVFFlat` would add complexity without measurable benefit below ~10K vectors.
 
-**Depthwise separable convolutions** factor a standard K×K convolution with C_in input and C_out output channels into two steps: a K×K depthwise convolution (one filter per input channel, C_in operations) followed by a 1×1 pointwise convolution (mixing channels, C_in × C_out operations). For a 3×3 kernel, this reduces computation by approximately 8-9× compared to a standard convolution while preserving the representational capacity needed for facial feature extraction.
+**Threshold-based matching** converts similarity scores into identity decisions (default threshold: **0.4**, calibrated for household conditions with variable lighting):
 
-**Inverted residual bottleneck blocks** (from MobileNetV2) reverse the traditional bottleneck pattern. Instead of compressing → processing → expanding, they expand channels to a higher dimension, apply depthwise convolution in this expanded space for richer feature interaction, then project back to a compact representation. The residual connection bridges the compact representations, keeping memory bandwidth low.
 
-**Global Depthwise Convolution (GDConv)** replaces the standard global average pooling at the network's output. Where average pooling treats all spatial positions equally — giving corner pixels the same weight as eye regions — GDConv applies a learned 7×7 depthwise kernel that discovers spatially-adaptive importance weights. In practice, these learned weights are highest around the eyes and nose bridge, encoding the insight that central facial features carry more identity information than peripheral regions.
+| Similarity | Interpretation                                            |
+| ---------- | --------------------------------------------------------- |
+| > 0.6      | High-confidence match — same person, similar conditions   |
+| 0.4 – 0.6  | Moderate match — same person, different angle or lighting |
+| 0.3 – 0.4  | Ambiguous — high false-accept risk                        |
+| < 0.3      | Different identity                                        |
 
-The model outputs a 512-dimensional vector that is L2-normalized to unit length. This normalization is critical: it projects all embeddings onto a unit hypersphere where cosine similarity equals the dot product, enabling efficient similarity computation.
 
-The preprocessing pipeline for inference is:
-1. Receive 112x112 RGB aligned crop
-2. Convert RGB → BGR (matching the model's training color space)
-3. Normalize pixel values: `(pixel - 127.5) / 127.5` → range `[-1, 1]`
-4. Transpose from HWC to CHW layout, add batch dimension → shape `(1, 3, 112, 112)`
-5. Run ONNX Runtime inference on CPU
-6. L2-normalize the output vector
+When multiple embeddings exist per identity, FAISS returns the single nearest neighbor across all enrollments, naturally handling intra-identity variation from different poses and lighting. Faces below threshold are labeled **"Unknown"**. A numpy-based fallback is available when `faiss-cpu` cannot be installed.
 
-## Similarity search with FAISS and threshold-based matching
+## Face Enrollment
 
-The pipeline maintains a face database using **FAISS (Facebook AI Similarity Search)** for embedding retrieval and **SQLite** for identity metadata. This dual-backend design separates the numerical computation (vector similarity) from the relational data (names, enrollment timestamps).
+Enrollment builds a representative embedding gallery for each identity through **time-gated temporal sampling at 1-second intervals** (monotonic clock, not frame counting). This avoids storing redundant near-duplicate embeddings at 20+ FPS while naturally capturing variation in micro-expressions, head pose, and lighting over seconds of natural behavior.
 
-FAISS uses an **`IndexFlatIP` (Flat Inner Product)** index, which computes exact dot products between a query vector and all stored vectors. For L2-normalized embeddings, the inner product equals the cosine similarity:
+**Per-sample pipeline:**
 
-```
-cos(a, b) = (a · b) / (‖a‖ · ‖b‖) = a · b    (when ‖a‖ = ‖b‖ = 1)
-```
+1. Select the detection with the **largest bounding box area** (proxy for closest-to-camera / highest quality)
+2. Run ArcFace alignment → 112x112 crop
+3. Extract 512-dim embedding via MobileFaceNet
+4. Store embedding in FAISS index + identity metadata in SQLite
 
-This equivalence also connects to Euclidean distance: `‖a - b‖² = 2(1 - cos(a, b))` for unit vectors, meaning cosine similarity and L2 distance produce identical rankings. The pipeline uses inner product directly because it avoids the subtraction and square root of L2 distance.
+**Quality control:** Frames without detected faces or without landmarks are silently skipped without advancing the sampling timer, ensuring every stored embedding represents a complete detection → alignment → extraction chain. A typical enrollment session produces **5-15 diverse embeddings** per identity, covering the intra-identity variation space needed for robust recognition across conditions.
 
-For the butler's expected scale (tens of identities, hundreds of enrolled embeddings), `IndexFlatIP` provides exact search with sub-millisecond latency. Approximate methods like `IndexIVFFlat` (Voronoi cell partitioning) would add complexity without measurable benefit below ~10,000 vectors.
-
-**Threshold-based matching** converts raw similarity scores into identity decisions. The pipeline defaults to a cosine similarity threshold of **0.4**, calibrated for household recognition where lighting conditions vary but the identity set is small:
-
-| Similarity | Interpretation |
-|-----------|---------------|
-| > 0.6 | High-confidence match — same person under similar conditions |
-| 0.4 – 0.6 | Moderate match — same person, different angle or lighting |
-| 0.3 – 0.4 | Ambiguous zone — possible match, high false-accept risk |
-| < 0.3 | Different identity — reject match |
-
-When the database contains multiple embeddings per identity (the expected case after enrollment), FAISS searches across all embeddings and returns the single nearest neighbor. The identity associated with that embedding determines the recognition result. This **maximum-similarity selection** naturally handles intra-identity variation: if a person was enrolled from multiple angles, the embedding closest to the current observation wins regardless of which angle it came from.
-
-When no embeddings exist in the database (or when the best similarity falls below the threshold), the pipeline labels the face as **"Unknown"**. A numpy-based fallback search is available for environments where the `faiss-cpu` package cannot be installed, providing identical results through direct matrix multiplication.
-
-## Face enrollment through temporal sampling
-
-The enrollment mode captures face embeddings at a controlled rate to build a representative gallery for each identity. Rather than storing every frame (which would produce redundant near-duplicate embeddings at 20+ FPS), the pipeline uses **time-gated sampling at 1-second intervals**.
-
-Each second, the pipeline:
-1. Selects the detection with the **largest bounding box area** (proxy for closest-to-camera, highest quality)
-2. Extracts the aligned 112x112 crop and computes the 512-dim embedding
-3. Stores the embedding in the FAISS index and SQLite database under the specified identity name
-
-This time-based approach (checked via monotonic clock comparison, not frame counting) produces samples that naturally span different micro-expressions, slight head movements, and lighting fluctuations that occur over seconds of natural behavior. The result is a gallery of 5-15 embeddings per person that covers the intra-identity variation space, improving recognition robustness across conditions.
-
-Frames where no face is detected or landmarks are unavailable are silently skipped without advancing the sampling timer, ensuring every stored embedding represents a successful detection-alignment-extraction chain.
+**Invocation:** `uv run main.py enroll --name "Name"` — the user faces the camera for 10-20 seconds while the system accumulates samples with live visual feedback (bounding box, landmark overlay, sample counter).
