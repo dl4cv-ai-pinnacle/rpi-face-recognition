@@ -40,6 +40,7 @@ The server binds to `0.0.0.0:8000` by default.
 - `/` also includes a simple upload form for enrolling identities by name.
 - `/stream.mjpg` returns an MJPEG stream (`multipart/x-mixed-replace`).
 - `/metrics.json` returns the current rolling live metrics snapshot.
+- `/metrics.json` includes the active `det_every` setting, so the dashboard shows the current detector cadence.
 
 ## Useful flags
 

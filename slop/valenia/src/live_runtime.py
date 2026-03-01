@@ -67,6 +67,7 @@ class LiveMetricsSnapshot:
     updated_at_epoch: float
     uptime_seconds: float
     frames_processed: int
+    det_every: int
     avg_fps: float
     avg_loop_ms: float
     avg_detect_ms: float
@@ -89,6 +90,7 @@ class LiveMetricsSnapshot:
             "updated_at_epoch": round(self.updated_at_epoch, 3),
             "uptime_seconds": round(self.uptime_seconds, 3),
             "frames_processed": self.frames_processed,
+            "det_every": self.det_every,
             "avg_fps": round(self.avg_fps, 3),
             "avg_loop_ms": round(self.avg_loop_ms, 3),
             "avg_detect_ms": round(self.avg_detect_ms, 3),
@@ -117,10 +119,12 @@ class LiveMetricsCollector:
         metrics_json_path: Path | None,
         write_every_frames: int,
         embed_refresh_enabled: bool,
+        det_every: int,
     ) -> None:
         self.metrics_json_path = metrics_json_path
         self.write_every_frames = max(1, write_every_frames)
         self.embed_refresh_enabled = embed_refresh_enabled
+        self.det_every = max(1, det_every)
         self._start_mono = time.perf_counter()
         self._lock = threading.Lock()
         self._frames_processed = 0
@@ -142,6 +146,7 @@ class LiveMetricsCollector:
             updated_at_epoch=time.time(),
             uptime_seconds=0.0,
             frames_processed=0,
+            det_every=self.det_every,
             avg_fps=0.0,
             avg_loop_ms=0.0,
             avg_detect_ms=0.0,
@@ -217,6 +222,7 @@ class LiveMetricsCollector:
             updated_at_epoch=time.time(),
             uptime_seconds=uptime,
             frames_processed=frames,
+            det_every=self.det_every,
             avg_fps=avg_fps,
             avg_loop_ms=avg_loop_ms,
             avg_detect_ms=(self._sum_detect_ms / frames) if frames else 0.0,
@@ -268,6 +274,7 @@ class LiveRuntime:
             metrics_json_path=config.metrics_json_path,
             write_every_frames=config.metrics_write_every,
             embed_refresh_enabled=not config.disable_embed_refresh,
+            det_every=config.det_every,
         )
 
     @property
