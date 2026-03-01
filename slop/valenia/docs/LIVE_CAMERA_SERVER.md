@@ -20,7 +20,7 @@ rpicam-hello --list-cameras
 
 ```bash
 python3 slop/valenia/scripts/live_camera_server.py \
-  --det-every 1 \
+  --det-every 2 \
   --track-max-missed 3 \
   --track-iou-thresh 0.3 \
   --track-smoothing 0.65 \
@@ -33,6 +33,35 @@ python3 slop/valenia/scripts/live_camera_server.py \
 ```
 
 The server binds to `0.0.0.0:8000` by default.
+
+This is the recommended balanced preset on the Pi right now:
+- `--det-every 2` cuts detector load substantially while keeping the stream stable.
+- `--track-max-missed 3`, `--track-iou-thresh 0.3`, and `--track-smoothing 0.65`
+  are a good middle ground for face motion without over-holding stale boxes.
+- `--embed-refresh-frames 5` and `--embed-refresh-iou 0.85` keep identity labels
+  fresh without re-embedding every frame.
+- `--match-threshold 0.228` is the measured baseline threshold from our LFW runs.
+
+If you want maximum recognition responsiveness, switch `--det-every` back to `1`.
+If you want more throughput and can tolerate a bit more lag for new faces, try `3`.
+
+## systemd Service
+
+Use the helper script to install and manage a `systemd` unit:
+
+```bash
+./slop/valenia/scripts/manage_live_camera_service.sh up
+```
+
+Available commands:
+- `up`: create `/etc/systemd/system/valenia-live-camera.service` if missing, enable it, and start it if needed
+- `down`: stop the service if it is running
+- `restart`: restart the service
+- `status`: show `systemctl status`
+- `logs`: follow `journalctl` logs
+
+The helper uses the same balanced defaults shown above. It does not overwrite an
+existing unit file, so local edits to the service file are preserved.
 
 ## Endpoints
 

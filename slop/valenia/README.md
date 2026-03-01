@@ -119,6 +119,12 @@ memory, detector cadence, and the raw metrics snapshot remains available at
 inbox and can be promoted from `http://<pi-ip>:8000/gallery`.
 Detailed notes: `slop/valenia/docs/LIVE_CAMERA_SERVER.md`
 
+To run it as a service with the same balanced defaults:
+
+```bash
+./slop/valenia/scripts/manage_live_camera_service.sh up
+```
+
 ## Notes
 
 - Code: `slop/valenia/src/`
