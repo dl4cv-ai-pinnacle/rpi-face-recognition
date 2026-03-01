@@ -55,6 +55,7 @@ Use the helper script to install and manage a `systemd` unit:
 
 Available commands:
 - `up`: create `/etc/systemd/system/valenia-live-camera.service` if missing, enable it, and start it if needed
+- `up`: also rewrites the unit file if the configured `ExecStart` differs, then restarts the service to apply the change
 - `down`: stop the service if it is running
 - `restart`: restart the service
 - `status`: show `systemctl status`

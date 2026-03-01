@@ -52,14 +52,8 @@ Commands:
 USAGE
 }
 
-create_service_if_missing() {
-  if [[ -f "${SERVICE_PATH}" ]]; then
-    return 0
-  fi
-
-  echo "Creating ${SERVICE_PATH}"
-  tmp_file="$(mktemp)"
-  cat > "${tmp_file}" <<UNIT
+render_service_unit() {
+  cat <<UNIT
 [Unit]
 Description=Valenia Live Camera MJPEG Server
 Wants=network-online.target
@@ -78,9 +72,26 @@ RestartSec=2
 [Install]
 WantedBy=multi-user.target
 UNIT
+}
+
+ensure_service_file() {
+  tmp_file="$(mktemp)"
+  render_service_unit > "${tmp_file}"
+  local action="unchanged"
+  if [[ ! -f "${SERVICE_PATH}" ]]; then
+    echo "Creating ${SERVICE_PATH}" >&2
+    action="created"
+  elif ! cmp -s "${tmp_file}" "${SERVICE_PATH}"; then
+    echo "Updating ${SERVICE_PATH}" >&2
+    action="updated"
+  fi
+
+  if [[ "${action}" != "unchanged" ]]; then
   "${SUDO_CMD[@]}" install -m 0644 "${tmp_file}" "${SERVICE_PATH}"
+    "${SUDO_CMD[@]}" systemctl daemon-reload
+  fi
   rm -f "${tmp_file}"
-  "${SUDO_CMD[@]}" systemctl daemon-reload
+  printf '%s\n' "${action}"
 }
 
 ensure_enabled() {
@@ -98,10 +109,16 @@ require_existing_service() {
 }
 
 cmd_up() {
-  create_service_if_missing
+  local service_action
+  service_action="$(ensure_service_file)"
   ensure_enabled
   if "${SUDO_CMD[@]}" systemctl is-active --quiet "${SERVICE_NAME}"; then
-    echo "${SERVICE_NAME} is already running"
+    if [[ "${service_action}" == "updated" ]]; then
+      "${SUDO_CMD[@]}" systemctl restart "${SERVICE_NAME}"
+      echo "Restarted ${SERVICE_NAME} to apply updated configuration"
+    else
+      echo "${SERVICE_NAME} is already running"
+    fi
   else
     "${SUDO_CMD[@]}" systemctl start "${SERVICE_NAME}"
     echo "Started ${SERVICE_NAME}"
@@ -119,7 +136,7 @@ cmd_down() {
 }
 
 cmd_restart() {
-  create_service_if_missing
+  ensure_service_file >/dev/null
   ensure_enabled
   "${SUDO_CMD[@]}" systemctl restart "${SERVICE_NAME}"
   echo "Restarted ${SERVICE_NAME}"

@@ -150,6 +150,18 @@ class StubGallery:
         return b"123", "image/jpeg"
 
 
+class SequenceGallery(StubGallery):
+    def __init__(self, matches: list[GalleryMatch]) -> None:
+        super().__init__()
+        self._matches = list(matches)
+
+    def match(self, embedding: Float32Array, threshold: float) -> GalleryMatch:
+        del embedding, threshold
+        self.match_calls += 1
+        idx = min(self.match_calls - 1, len(self._matches) - 1)
+        return self._matches[idx]
+
+
 def build_runtime(
     pipeline: StubPipeline,
     gallery: StubGallery,
@@ -291,6 +303,36 @@ def test_live_runtime_auto_captures_unknown_faces() -> None:
     assert gallery.capture_unknown_calls == 1
     assert frame_result.overlay.faces[0].match is not None
     assert frame_result.overlay.faces[0].match.name == "unknown-0001"
+
+
+def test_live_runtime_only_graces_known_identity_for_brief_occlusion() -> None:
+    pipeline = StubPipeline([make_detection(), make_detection(), make_detection()])
+    gallery = SequenceGallery(
+        [
+            GalleryMatch(name="Andrii", slug="andrii", score=0.94, matched=True),
+            GalleryMatch(name=None, slug=None, score=0.02, matched=False),
+            GalleryMatch(name=None, slug=None, score=0.02, matched=False),
+        ]
+    )
+    runtime = build_runtime(
+        pipeline,
+        gallery,
+        det_every=1,
+        disable_embed_refresh=False,
+        embed_refresh_frames=1,
+    )
+
+    first = runtime.process_frame(make_frame())
+    second = runtime.process_frame(make_frame())
+    third = runtime.process_frame(make_frame())
+
+    assert first.overlay.faces[0].match is not None
+    assert first.overlay.faces[0].match.name == "Andrii"
+    assert second.overlay.faces[0].match is not None
+    assert second.overlay.faces[0].match.name == "Andrii"
+    assert gallery.capture_unknown_calls == 1
+    assert third.overlay.faces[0].match is not None
+    assert third.overlay.faces[0].match.name == "unknown-0001"
 
 
 def test_live_runtime_enroll_delegates_to_gallery() -> None:

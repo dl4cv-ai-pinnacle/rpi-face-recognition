@@ -454,12 +454,9 @@ class LiveRuntime:
                 embed_ms_total += emb_ms
                 refreshes += 1
                 new_match = self.gallery.match(emb, self.config.match_threshold)
-                if (
-                    not new_match.matched
-                    and state is not None
-                    and state.match.matched
-                    and state.match.name is not None
-                ):
+                current_box = np.asarray(track.box, dtype=np.float32)
+                if self._should_keep_previous_known_match(track, state, new_match):
+                    assert state is not None
                     match = state.match
                 elif not new_match.matched:
                     crop = _crop_face_region(frame_bgr, track.box)
@@ -467,13 +464,18 @@ class LiveRuntime:
                         match = self.gallery.capture_unknown(emb, crop)
                     else:
                         match = new_match
+                    self._track_states[track.track_id] = TrackIdentityState(
+                        match=match,
+                        last_embed_frame=self._frame_counter,
+                        last_embed_box=current_box,
+                    )
                 else:
                     match = new_match
-                self._track_states[track.track_id] = TrackIdentityState(
-                    match=match,
-                    last_embed_frame=self._frame_counter,
-                    last_embed_box=np.asarray(track.box, dtype=np.float32),
-                )
+                    self._track_states[track.track_id] = TrackIdentityState(
+                        match=match,
+                        last_embed_frame=self._frame_counter,
+                        last_embed_box=current_box,
+                    )
             elif match is not None:
                 reuses += 1
             overlay_faces.append(OverlayFace(track=track, match=match))
@@ -524,11 +526,36 @@ class LiveRuntime:
             return True
 
         refresh_frames = max(0, int(self.config.embed_refresh_frames))
+        if state.match.matched and state.match.name is not None and refresh_frames > 0:
+            refresh_frames = min(refresh_frames, 2)
         if refresh_frames > 0 and (self._frame_counter - state.last_embed_frame) >= refresh_frames:
             return True
 
         current_box = np.asarray(track.box, dtype=np.float32)
         return _box_iou(current_box[:4], state.last_embed_box[:4]) < self.config.embed_refresh_iou
+
+    def _should_keep_previous_known_match(
+        self,
+        track: Track,
+        state: TrackIdentityState | None,
+        new_match: GalleryMatch,
+    ) -> bool:
+        if new_match.matched or state is None:
+            return False
+        if not state.match.matched or state.match.name is None:
+            return False
+
+        frames_since_confirmed = self._frame_counter - state.last_embed_frame
+        if frames_since_confirmed > 1:
+            return False
+
+        prior_margin = state.match.score - self.config.match_threshold
+        if prior_margin < 0.08:
+            return False
+
+        current_box = np.asarray(track.box, dtype=np.float32)
+        grace_iou = max(0.9, self.config.embed_refresh_iou)
+        return _box_iou(current_box[:4], state.last_embed_box[:4]) >= grace_iou
 
     def _should_run_detection(self) -> bool:
         interval = max(1, int(self.config.det_every))

@@ -272,18 +272,28 @@ HTML_PAGE = """<!doctype html>
       opacity: 0.4;
     }
     .toggle-btn {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #ccc;
       padding: 0.3rem 0.6rem;
       border-radius: 4px;
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       cursor: pointer;
       font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .stream-wrap:hover .toggle-btn,
+    .toggle-btn:focus {
+      opacity: 1;
     }
     .toggle-btn:hover {
-      color: var(--text);
-      border-color: var(--muted);
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.4);
     }
     @media (max-width: 980px) {
       .layout {
@@ -312,16 +322,19 @@ HTML_PAGE = """<!doctype html>
       display: none;
       grid-template-columns: minmax(180px, 0.7fr) minmax(0, 2fr) minmax(180px, 0.7fr);
       gap: 0.5rem;
-      align-items: start;
       height: calc(100vh - 4.5rem);
     }
     .cinema-view .stream-wrap {
       aspect-ratio: unset;
       height: 100%;
     }
+    .cinema-view #cinema-stream {
+      min-height: 0;
+    }
     .cinema-side {
       overflow-y: auto;
       max-height: calc(100vh - 4.5rem);
+      align-self: start;
       font-size: 0.85rem;
     }
     .cinema-side h3 {
@@ -356,6 +369,9 @@ HTML_PAGE = """<!doctype html>
       margin-top: 0.5rem;
       padding-top: 0.5rem;
     }
+    body.cinema .toggle-btn {
+      opacity: 1;
+    }
     body.cinema .disconnect-banner {
       margin-bottom: 0.5rem;
     }
@@ -377,8 +393,6 @@ HTML_PAGE = """<!doctype html>
       <a href="/gallery">Gallery</a>
       <a href="/stream.mjpg">Stream</a>
       <a href="/metrics.json">Metrics JSON</a>
-      <button id="cinema-toggle" class="toggle-btn"
-              title="Toggle cinema mode (F)">Cinema</button>
     </nav>
     <div id="disconnect-banner" class="disconnect-banner">
       Server disconnected. The stream and metrics have stopped updating.
@@ -393,6 +407,8 @@ HTML_PAGE = """<!doctype html>
           </div>
           <img id="stream-img" src="/stream.mjpg"
                alt="Live camera stream">
+          <button id="cinema-toggle" class="toggle-btn"
+                  title="Toggle cinema mode (F)">Cinema</button>
         </div>
       </section>
       <aside class="stack">
@@ -720,6 +736,8 @@ HTML_PAGE = """<!doctype html>
       cinemaToggle.textContent = 'Exit';
       // Move stream into cinema center.
       cinemaCenter.appendChild(streamWrap);
+      // Reparenting kills the MJPEG connection; reconnect.
+      connectStream();
       // Build side panels from live metric containers.
       cinemaLeft.innerHTML = '';
       cinemaRight.innerHTML = '';
@@ -754,6 +772,8 @@ HTML_PAGE = """<!doctype html>
       h2f.textContent = 'Live Feed';
       slot.appendChild(h2f);
       slot.appendChild(streamWrap);
+      // Reparenting kills the MJPEG connection; reconnect.
+      connectStream();
       // Restore metrics sidebar.
       const aside = document.querySelector(
         '.default-view aside section'
