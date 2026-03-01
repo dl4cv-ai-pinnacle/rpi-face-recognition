@@ -271,6 +271,20 @@ HTML_PAGE = """<!doctype html>
     .stream-wrap.disconnected {
       opacity: 0.4;
     }
+    .toggle-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 0.3rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .toggle-btn:hover {
+      color: var(--text);
+      border-color: var(--muted);
+    }
     @media (max-width: 980px) {
       .layout {
         grid-template-columns: 1fr;
@@ -279,6 +293,79 @@ HTML_PAGE = """<!doctype html>
     @media (max-width: 620px) {
       .metrics-grid {
         grid-template-columns: 1fr;
+      }
+    }
+
+    /* -- cinema / fullscreen mode -- */
+    body.cinema main {
+      width: 100%;
+      max-width: 100%;
+      padding: 0.5rem;
+    }
+    body.cinema nav {
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.5rem;
+    }
+    body.cinema .default-view { display: none; }
+    body.cinema .cinema-view { display: grid; }
+    .cinema-view {
+      display: none;
+      grid-template-columns: minmax(180px, 0.7fr) minmax(0, 2fr) minmax(180px, 0.7fr);
+      gap: 0.5rem;
+      align-items: start;
+      height: calc(100vh - 4.5rem);
+    }
+    .cinema-view .stream-wrap {
+      aspect-ratio: unset;
+      height: 100%;
+    }
+    .cinema-side {
+      overflow-y: auto;
+      max-height: calc(100vh - 4.5rem);
+      font-size: 0.85rem;
+    }
+    .cinema-side h3 {
+      margin: 0.5rem 0 0.4rem;
+      font-size: 0.75rem;
+    }
+    .cinema-side .metric-card {
+      padding: 0.5rem;
+    }
+    .cinema-side .metric-value {
+      font-size: 1.1rem;
+    }
+    .cinema-side .metric-detail {
+      font-size: 0.75rem;
+    }
+    .cinema-side .metrics-grid {
+      grid-template-columns: 1fr;
+      gap: 0.35rem;
+      margin-bottom: 0.5rem;
+    }
+    .cinema-side .list-row {
+      padding: 0.3rem 0;
+    }
+    .cinema-side .list-key {
+      font-size: 0.8rem;
+    }
+    .cinema-side .list-value {
+      font-size: 0.8rem;
+    }
+    .cinema-side .status-line {
+      font-size: 0.8rem;
+      margin-top: 0.5rem;
+      padding-top: 0.5rem;
+    }
+    body.cinema .disconnect-banner {
+      margin-bottom: 0.5rem;
+    }
+    @media (max-width: 980px) {
+      .cinema-view {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      .cinema-side {
+        max-height: none;
       }
     }
   </style>
@@ -290,18 +377,22 @@ HTML_PAGE = """<!doctype html>
       <a href="/gallery">Gallery</a>
       <a href="/stream.mjpg">Stream</a>
       <a href="/metrics.json">Metrics JSON</a>
+      <button id="cinema-toggle" class="toggle-btn"
+              title="Toggle cinema mode (F)">Cinema</button>
     </nav>
     <div id="disconnect-banner" class="disconnect-banner">
       Server disconnected. The stream and metrics have stopped updating.
     </div>
-    <div class="layout">
+    <!-- default two-column view -->
+    <div class="layout default-view">
       <section>
         <h2>Live Feed</h2>
-        <div class="stream-wrap">
+        <div id="stream-default" class="stream-wrap">
           <div id="stream-loading" class="stream-loading">
             <span class="spinner"></span> Connecting...
           </div>
-          <img id="stream-img" src="/stream.mjpg" alt="Live camera stream">
+          <img id="stream-img" src="/stream.mjpg"
+               alt="Live camera stream">
         </div>
       </section>
       <aside class="stack">
@@ -317,9 +408,16 @@ HTML_PAGE = """<!doctype html>
             <h3>Pipeline</h3>
           </div>
           <div id="pipeline-metrics" class="list-grid"></div>
-          <div id="runtime-status" class="status-line">Loading metrics...</div>
+          <div id="runtime-status"
+               class="status-line">Loading metrics...</div>
         </section>
       </aside>
+    </div>
+    <!-- cinema three-column view -->
+    <div class="cinema-view">
+      <div id="cinema-left" class="cinema-side"></div>
+      <div id="cinema-stream"></div>
+      <div id="cinema-right" class="cinema-side"></div>
     </div>
   </main>
   <script>
@@ -607,6 +705,89 @@ HTML_PAGE = """<!doctype html>
 
     refreshMetrics();
     window.setInterval(refreshMetrics, 1000);
+
+    // -- cinema mode ---------------------------------------------------------
+    const cinemaToggle = document.getElementById('cinema-toggle');
+    const cinemaLeft = document.getElementById('cinema-left');
+    const cinemaCenter = document.getElementById('cinema-stream');
+    const cinemaRight = document.getElementById('cinema-right');
+    const streamDefault = document.getElementById('stream-default');
+    let cinemaActive = false;
+
+    function enterCinema() {
+      cinemaActive = true;
+      document.body.classList.add('cinema');
+      cinemaToggle.textContent = 'Exit';
+      // Move stream into cinema center.
+      cinemaCenter.appendChild(streamWrap);
+      // Build side panels from live metric containers.
+      cinemaLeft.innerHTML = '';
+      cinemaRight.innerHTML = '';
+      // Left side: hero cards + system metrics.
+      const leftH = document.createElement('h3');
+      leftH.textContent = 'Overview';
+      cinemaLeft.appendChild(leftH);
+      cinemaLeft.appendChild(heroMetrics);
+      const sysH = document.createElement('h3');
+      sysH.textContent = 'System';
+      cinemaLeft.appendChild(sysH);
+      cinemaLeft.appendChild(systemMetrics);
+      // Right side: pipeline + status + errors.
+      const pipH = document.createElement('h3');
+      pipH.textContent = 'Pipeline';
+      cinemaRight.appendChild(pipH);
+      cinemaRight.appendChild(pipelineMetrics);
+      cinemaRight.appendChild(runtimeStatus);
+      cinemaRight.appendChild(errorBanner);
+    }
+
+    function exitCinema() {
+      cinemaActive = false;
+      document.body.classList.remove('cinema');
+      cinemaToggle.textContent = 'Cinema';
+      // Move stream back to default slot.
+      const slot = document.querySelector(
+        '.default-view section:first-child'
+      );
+      slot.innerHTML = '';
+      const h2f = document.createElement('h2');
+      h2f.textContent = 'Live Feed';
+      slot.appendChild(h2f);
+      slot.appendChild(streamWrap);
+      // Restore metrics sidebar.
+      const aside = document.querySelector(
+        '.default-view aside section'
+      );
+      aside.innerHTML = '';
+      const h2m = document.createElement('h2');
+      h2m.textContent = 'Metrics';
+      aside.appendChild(h2m);
+      aside.appendChild(errorBanner);
+      aside.appendChild(heroMetrics);
+      const sep1 = document.createElement('div');
+      sep1.className = 'section-sep';
+      sep1.innerHTML = '<h3>System</h3>';
+      aside.appendChild(sep1);
+      aside.appendChild(systemMetrics);
+      const sep2 = document.createElement('div');
+      sep2.className = 'section-sep';
+      sep2.innerHTML = '<h3>Pipeline</h3>';
+      aside.appendChild(sep2);
+      aside.appendChild(pipelineMetrics);
+      aside.appendChild(runtimeStatus);
+    }
+
+    function toggleCinema() {
+      if (cinemaActive) { exitCinema(); } else { enterCinema(); }
+    }
+
+    cinemaToggle.addEventListener('click', toggleCinema);
+    document.addEventListener('keydown', function(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') { toggleCinema(); }
+    });
   </script>
 </body>
 </html>
