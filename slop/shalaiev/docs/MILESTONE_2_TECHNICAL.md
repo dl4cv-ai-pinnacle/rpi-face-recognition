@@ -1,8 +1,27 @@
-# Technical Overview — Implemented Computer Vision Pipeline
+# Milestone II - Intermediary report on the progress
 
-This document covers the computer vision techniques and architectural decisions behind the Butler face recognition pipeline. 
 
-**Note**: The current version of each of the pipelines is different for each of the team members. We decided to seprately build an independent end-to-end implementation, and after the group review, the strongest components will be merged in later milestones.
+Team: **AI Pinnacle**:
+
+1. Dmytro Avdieienko
+
+1. Andrii Shalaiev
+
+1. Andrii Valenia
+
+
+This report covers the intermediary progrss on the Raspberry Pi face recognition with identity memory and additional modules.
+
+After the first milestone on the project and discussing with the team, **we have decided to split our efforts** by each implementing an end-to-end pipeline all by ourselves. This would motivate us to research the findings more about each of the stages, and combine the findings and merge the best performance stages after this milestone.
+
+Since the efforts were split and no group meeting to review the whole pipeline was done, we are currently unaware of the progresses and contributions to the final score, but we can say that the basic end-to-end pipeline was implemented by each of the members.
+
+Personally, I have spent around 10-12 hours over the span of the last week (unfortunately, couldn't dedicate more time).
+
+**Link to repository (my branch)**: https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition/tree/feat/v1-shalaiev
+
+More on the planned actions before the end of the project are described in the end of the document.
+
 
 ## Pipeline Overview
 
@@ -93,3 +112,50 @@ Enrollment builds a representative embedding gallery for each identity through *
 **Quality control:** Frames without detected faces or without landmarks are silently skipped without advancing the sampling timer, ensuring every stored embedding represents a complete detection → alignment → extraction chain. A typical enrollment session produces **5-15 diverse embeddings** per identity, covering the intra-identity variation space needed for robust recognition across conditions.
 
 **Invocation:** `uv run main.py enroll --name "Name"` — the user faces the camera for 10-20 seconds while the system accumulates samples with live visual feedback (bounding box, landmark overlay, sample counter).
+
+## Models & Datasets Summary
+
+| Role | Model / Dataset | Source | Key Metric |
+| ---- | --------------- | ------ | ---------- |
+| Face detection | SCRFD-500M | InsightFace | 90.57% WIDER Easy, ~20 FPS RPi 5 |
+| Face detection (fallback) | UltraFace-slim | ONNX Zoo | ~65 FPS RPi 5, no landmarks |
+| Face embedding | MobileFaceNet `w600k_mbf` | InsightFace buffalo_sc | 99.55% LFW, 0.99M params |
+| Embedding search | FAISS `IndexFlatIP` | Meta FAISS | Exact cosine, sub-ms at <10K vectors |
+| Training set (embedding model) | WebFace600K | InsightFace | 600K identities, ~10M images |
+| Detection benchmark | WIDER FACE | WIDER FACE project | Easy / Medium / Hard splits |
+| Verification benchmark | LFW | UMass | 6,000 face pairs, standard protocol |
+
+## What Worked and What Didn't
+
+**What worked well:**
+- The whole pipeline of facial detection and recognition worked with good performance at ~20 FPS on RPi 5 with 4 GB of RAM (as opposed to 8 GB in my fellow team members), even without the identity continuous tracking and simply run the entire recognition on each frame.
+- While we haven't implemented identity tracking, multi-face problems were quite easy 
+- The libraries selected mostly worked without major problems in terms of dependencies, the installation is pretty straightforward.
+- The radiators along with the fans do a good job of keeping the entire Raspberry Pi cold, even under high load (40 degrees with no load and no fans, ~56-60 degrees during full load with fans working).
+- Technical stuff (quite reliable quality in well-lit rooms, easy identity enrollment via the algorithm described above, etc.)
+
+**What didn't work or posed challenges:**
+- Actually, getting hands on a Raspberry Pi with all necessary components and assembling everything together took a long time, since it is the first time working with it.
+
+Otherwise, everything worked smoothly with no major issues.
+
+## Remaining Work
+
+### Core pipeline completion (target requirements)
+
+- **Multi-face tracking** — Integrate Norfair (BSD) or DeepSORT to maintain identity across frames, reducing per-frame recognition cost and eliminating ID flicker
+- **TTS greeting system** — Context-aware spoken greetings via pyttsx3/espeak (e.g., "Good morning, Sarah — you're up early today!"), with last-seen tracking for differentiated responses
+- **Performance optimization** — Migrate inference from ONNX Runtime to MNN for ~2-3x ARM speedup; explore INT8 quantization for both detection and embedding models
+- **Robustness testing** — Evaluate recognition accuracy across lighting conditions, distances, and angles; tune thresholds per environment
+
+### Additional modules (ideal-tier goals)
+
+- **Anti-spoofing** — Passive liveness detection using MiniFASNet (cascade: LBP quick check → CNN deep check) to reject printed photos and screen replay attacks
+- **Sign/gesture recognition** — Detect and distinguish hand signs per person, enabling gesture-based commands (e.g., wave to trigger a specific action)
+- **Personal profiles with action bindings** — Per-identity profiles mapping recognized signs/gestures to custom actions (play music, toggle lights, etc.)
+- **Continuous learning** — Online adaptation of the embedding gallery to better fit each person over time and adjust to deployment-specific lighting/background conditions
+- **Multiprocessing pipeline** — Split capture, detection, and recognition across CPU cores using `multiprocessing.SharedMemory` for frame passing, bypassing the GIL bottleneck
+
+
+In addition, we will also need presentation for the project (record or show live) demo, as well as running different benchmarks and trying and deploying it in a live settings (temporarily, but as a way to test real performance).
+
