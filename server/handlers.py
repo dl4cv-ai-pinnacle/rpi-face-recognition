@@ -420,9 +420,6 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
 
     def _handle_api_capture_frame(self) -> None:
         """POST /api/capture-frame — grab the latest frame, run detection, return JSON."""
-        from src.quality import estimate_face_pose
-
-        snapshot = self.streamer.wait_for_frame(last_seen=-1, timeout=3.0)
         no_face: dict[str, object] = {
             "face_detected": False,
             "face_count": 0,
@@ -430,6 +427,16 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             "jpeg_base64": "",
             "face_jpeg_base64": None,
         }
+        try:
+            self._handle_api_capture_frame_inner(no_face)
+        except Exception as exc:
+            no_face["error"] = str(exc)
+            self._send_json(no_face)
+
+    def _handle_api_capture_frame_inner(self, no_face: dict[str, object]) -> None:
+        from src.quality import estimate_face_pose
+
+        snapshot = self.streamer.wait_for_frame(last_seen=-1, timeout=3.0)
         if snapshot.error is not None or snapshot.jpeg_bytes is None:
             self._send_json(no_face)
             return
@@ -447,15 +454,12 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         det_result, _ = self.runtime.pipeline.detect(frame_bgr)
         face_count = len(det_result.boxes)
 
-        # Estimate pose from landmarks (SCRFD only; UltraFace has no landmarks).
         pose = "unknown"
         if face_count == 1 and det_result.kps is not None and len(det_result.kps) > 0:
             pose = estimate_face_pose(det_result.kps[0])
 
-        # Encode the full annotated frame as base64 JPEG.
         full_b64 = base64.b64encode(snapshot.jpeg_bytes).decode("ascii")
 
-        # Crop the first detected face for the thumbnail preview.
         face_b64: str | None = None
         if face_count > 0:
             box = det_result.boxes[0]
@@ -1387,8 +1391,8 @@ def _render_enroll_wizard_page() -> str:
         el.className = "status" + (cls ? " " + cls : "");
       }
 
-      // Start polling when the page loads
-      startPolling();
+      // Start polling after a short delay to let the stream connect.
+      setTimeout(startPolling, 2000);
     })();
     </script>"""
     return _page_shell("Enroll with Camera", content, current="/enroll-wizard")
