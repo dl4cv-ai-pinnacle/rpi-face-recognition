@@ -20,6 +20,38 @@ class FaceQuality:
     face_area: float
 
 
+def estimate_face_pose(landmarks: Float32Array | None) -> str:
+    """Estimate pose from 5-point landmarks (SCRFD order).
+
+    Returns 'frontal', 'left', 'right', or 'unknown'.
+
+    Uses the ratio of horizontal distances from each eye to the nose tip.
+    A ratio near 1.0 means frontal; >1.4 means the face is turned toward the
+    camera's left (user's right); <0.7 means turned toward the camera's right.
+    """
+    if landmarks is None or landmarks.shape != (5, 2):
+        return "unknown"
+
+    left_eye_x = float(landmarks[0, 0])
+    right_eye_x = float(landmarks[1, 0])
+    nose_x = float(landmarks[2, 0])
+
+    left_dist = nose_x - left_eye_x
+    right_dist = right_eye_x - nose_x
+
+    if left_dist <= 0 or right_dist <= 0:
+        return "unknown"
+
+    ratio = left_dist / right_dist
+
+    if 0.7 <= ratio <= 1.4:
+        return "frontal"
+    elif ratio > 1.4:
+        return "left"  # face turned toward camera's left (user's right)
+    else:
+        return "right"  # face turned toward camera's right (user's left)
+
+
 def compute_face_quality(
     box: Float32Array,
     *,

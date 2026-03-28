@@ -420,10 +420,13 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
 
     def _handle_api_capture_frame(self) -> None:
         """POST /api/capture-frame — grab the latest frame, run detection, return JSON."""
+        from src.quality import estimate_face_pose
+
         snapshot = self.streamer.wait_for_frame(last_seen=-1, timeout=3.0)
-        no_face = {
+        no_face: dict[str, object] = {
             "face_detected": False,
             "face_count": 0,
+            "pose": "unknown",
             "jpeg_base64": "",
             "face_jpeg_base64": None,
         }
@@ -443,6 +446,11 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
 
         det_result, _ = self.runtime.pipeline.detect(frame_bgr)
         face_count = len(det_result.boxes)
+
+        # Estimate pose from landmarks (SCRFD only; UltraFace has no landmarks).
+        pose = "unknown"
+        if face_count == 1 and det_result.kps is not None and len(det_result.kps) > 0:
+            pose = estimate_face_pose(det_result.kps[0])
 
         # Encode the full annotated frame as base64 JPEG.
         full_b64 = base64.b64encode(snapshot.jpeg_bytes).decode("ascii")
@@ -465,6 +473,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self._send_json({
             "face_detected": face_count > 0,
             "face_count": face_count,
+            "pose": pose,
             "jpeg_base64": full_b64,
             "face_jpeg_base64": face_b64,
         })
@@ -1137,15 +1146,105 @@ def _render_enroll_wizard_page() -> str:
         "Turn your head slightly to the left",
         "Turn your head slightly to the right",
       ];
+      const EXPECTED_POSES = ["frontal", "left", "right"];
+      const POLL_MS = 500;
+      const HOLD_POLLS = 2;  // consecutive matching polls (~1s at 500ms)
 
       let currentStep = 0;  // 0-indexed
       let captures = [null, null, null];  // base64 JPEG strings
       let faceThumbs = [null, null, null];  // base64 face crops for preview
       let capturing = false;
 
+      // Auto-capture state
+      let poseMatchCount = 0;   // consecutive polls with matching pose
+      let pollTimer = null;     // setInterval id
+      let autoCaptureData = null;  // last poll data when pose matched
+
+      function startPolling() {
+        stopPolling();
+        poseMatchCount = 0;
+        autoCaptureData = null;
+        pollTimer = setInterval(pollForPose, POLL_MS);
+      }
+
+      function stopPolling() {
+        if (pollTimer !== null) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+        poseMatchCount = 0;
+        autoCaptureData = null;
+      }
+
+      async function pollForPose() {
+        if (capturing) return;
+        if (captures[currentStep] !== null) return;
+
+        var instrEl = document.getElementById("wizard-instruction");
+        try {
+          var resp = await fetch("/api/capture-frame", { method: "POST" });
+          var data = await resp.json();
+        } catch (err) {
+          return;  // silently skip network errors during polling
+        }
+
+        // No pose detection available (UltraFace) — stay on manual mode
+        if (data.pose === "unknown" && data.face_detected) {
+          instrEl.classList.remove("pose-ok");
+          return;
+        }
+
+        var expected = EXPECTED_POSES[currentStep];
+        if (data.face_detected && data.face_count === 1 && data.pose === expected) {
+          poseMatchCount++;
+          autoCaptureData = data;
+          instrEl.textContent = STEPS[currentStep] + " \u2014 hold pose\u2026 \ud83d\udfe2";
+          instrEl.classList.add("pose-ok");
+
+          if (poseMatchCount >= HOLD_POLLS) {
+            // Auto-capture!
+            stopPolling();
+            applyCapture(autoCaptureData);
+          }
+        } else {
+          poseMatchCount = 0;
+          autoCaptureData = null;
+          instrEl.textContent = STEPS[currentStep];
+          instrEl.classList.remove("pose-ok");
+        }
+      }
+
+      function applyCapture(data) {
+        captures[currentStep] = data.jpeg_base64;
+        faceThumbs[currentStep] = data.face_jpeg_base64;
+        updateThumb(currentStep);
+
+        var instrEl = document.getElementById("wizard-instruction");
+        instrEl.textContent = "Captured!";
+        instrEl.classList.add("pose-ok");
+
+        showStatus("", "");
+
+        // Brief flash then auto-advance
+        setTimeout(function() {
+          instrEl.classList.remove("pose-ok");
+          if (currentStep < 2) {
+            currentStep++;
+            updateStepUI();
+            startPolling();
+          } else {
+            // All 3 captured — show enroll form
+            document.getElementById("wizard-actions").style.display = "none";
+            document.getElementById("wizard-enroll").style.display = "";
+            document.getElementById("enroll-name").focus();
+          }
+        }, 600);
+      }
+
       window.captureFrame = async function() {
         if (capturing) return;
         capturing = true;
+        stopPolling();
         const btn = document.getElementById("btn-capture");
         btn.textContent = "Capturing...";
         btn.disabled = true;
@@ -1158,6 +1257,7 @@ def _render_enroll_wizard_page() -> str:
             btn.textContent = "Capture";
             btn.disabled = false;
             capturing = false;
+            startPolling();
             return;
           }
           if (data.face_count > 1) {
@@ -1165,6 +1265,7 @@ def _render_enroll_wizard_page() -> str:
             btn.textContent = "Capture";
             btn.disabled = false;
             capturing = false;
+            startPolling();
             return;
           }
 
@@ -1200,6 +1301,7 @@ def _render_enroll_wizard_page() -> str:
         document.getElementById("wizard-review").style.display = "none";
         document.getElementById("wizard-actions").style.display = "";
         showStatus("", "");
+        startPolling();
       };
 
       window.nextStep = function() {
@@ -1210,6 +1312,7 @@ def _render_enroll_wizard_page() -> str:
           currentStep++;
           updateStepUI();
           document.getElementById("wizard-actions").style.display = "";
+          startPolling();
         } else {
           // All 3 captured — show enroll form
           document.getElementById("wizard-actions").style.display = "none";
@@ -1219,6 +1322,7 @@ def _render_enroll_wizard_page() -> str:
       };
 
       window.submitEnrollment = async function() {
+        stopPolling();
         const name = document.getElementById("enroll-name").value.trim();
         if (!name) {
           showStatus("Name is required.", "err");
@@ -1253,6 +1357,7 @@ def _render_enroll_wizard_page() -> str:
 
       function updateStepUI() {
         document.getElementById("wizard-instruction").textContent = STEPS[currentStep];
+        document.getElementById("wizard-instruction").classList.remove("pose-ok");
         var stepEls = document.querySelectorAll(".wizard-step");
         for (var i = 0; i < stepEls.length; i++) {
           stepEls[i].classList.toggle("active", i === currentStep);
@@ -1281,6 +1386,9 @@ def _render_enroll_wizard_page() -> str:
         el.textContent = msg;
         el.className = "status" + (cls ? " " + cls : "");
       }
+
+      // Start polling when the page loads
+      startPolling();
     })();
     </script>"""
     return _page_shell("Enroll with Camera", content, current="/enroll-wizard")
