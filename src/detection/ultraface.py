@@ -66,7 +66,7 @@ class UltraFaceDetector:
         if not model_path.exists():
             msg = (
                 f"UltraFace model not found at {model_path}. "
-                "Download version-slim-320.onnx and place it in the models/ directory."
+                "Run: bash scripts/download_models.sh"
             )
             raise FileNotFoundError(msg)
 
