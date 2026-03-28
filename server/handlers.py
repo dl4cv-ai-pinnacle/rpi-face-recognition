@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, quote, urlparse
 
 if TYPE_CHECKING:
+    from src.config import AppConfig
     from src.gallery import EnrollmentResult, IdentityRecord, UnknownRecord
     from src.live import LiveRuntime
 
@@ -40,11 +41,14 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         routes: dict[str, object] = {
             "/": self._serve_index,
+            "/settings": self._serve_settings,
             "/gallery": self._serve_gallery,
             "/gallery/identity": lambda: self._serve_identity_detail(parsed.query),
             "/gallery/image": lambda: self._serve_gallery_image(parsed.query),
             "/stream.mjpg": self._serve_mjpeg,
             "/metrics.json": self._serve_metrics_json,
+            "/api/config": self._serve_api_config,
+            "/api/config/backends": self._serve_api_backends,
         }
         handler = routes.get(parsed.path)
         if handler is not None:
@@ -63,6 +67,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             "/gallery/delete-identity": self._handle_gallery_delete_identity,
             "/gallery/delete-sample": self._handle_gallery_delete_sample,
             "/gallery/upload-samples": self._handle_gallery_upload_samples,
+            "/api/config": self._handle_api_config_update,
         }
         handler = routes.get(parsed.path)
         if handler is not None:
@@ -152,6 +157,156 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_settings(self) -> None:
+        body = _render_settings_page(self.runtime.config).encode("utf-8")
+        self._send_html(body)
+
+    def _serve_api_config(self) -> None:
+        """GET /api/config — return current active config as JSON."""
+        config = self.runtime.config
+        data = {
+            "detection": {"backend": config.detection.backend},
+            "alignment": {"method": config.alignment.method},
+            "embedding": {"quantize_int8": config.embedding.quantize_int8},
+            "matching": {"threshold": config.matching.threshold},
+            "tracking": {
+                "max_missed": config.tracking.max_missed,
+                "smoothing": config.tracking.smoothing,
+            },
+            "live": {
+                "det_every": config.live.det_every,
+                "match_threshold": config.live.match_threshold,
+            },
+            "gallery": {
+                "enrich_min_quality": config.gallery.enrich_min_quality,
+                "enrich_cooldown_seconds": config.gallery.enrich_cooldown_seconds,
+            },
+        }
+        body = json.dumps(data, indent=2).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_api_backends(self) -> None:
+        """GET /api/config/backends — available backends per stage."""
+        data = {
+            "detection": ["insightface", "ultraface"],
+            "alignment": ["cv2", "skimage"],
+        }
+        body = json.dumps(data, indent=2).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_api_config_update(self) -> None:
+        """POST /api/config — update config and rebuild affected components."""
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_error(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
+            return
+        payload = self.rfile.read(max(0, content_length))
+        try:
+            updates = json.loads(payload.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_error(HTTPStatus.BAD_REQUEST, "Invalid JSON")
+            return
+
+        from dataclasses import replace
+
+        from src.alignment import create_aligner
+        from src.detection import create_detector
+        from src.embedding import create_embedder
+        from src.pipeline import FacePipeline
+
+        config = self.runtime.config
+        needs_rebuild = False
+
+        # Detection backend change
+        det_config = config.detection
+        if "detection" in updates and "backend" in updates["detection"]:
+            new_backend = updates["detection"]["backend"]
+            if new_backend != det_config.backend:
+                det_config = replace(det_config, backend=new_backend)
+                needs_rebuild = True
+
+        # Alignment method change
+        align_config = config.alignment
+        if "alignment" in updates and "method" in updates["alignment"]:
+            new_method = updates["alignment"]["method"]
+            if new_method != align_config.method:
+                align_config = replace(align_config, method=new_method)
+                needs_rebuild = True
+
+        # Embedding INT8 toggle
+        embed_config = config.embedding
+        if "embedding" in updates and "quantize_int8" in updates["embedding"]:
+            new_int8 = bool(updates["embedding"]["quantize_int8"])
+            if new_int8 != embed_config.quantize_int8:
+                embed_config = replace(embed_config, quantize_int8=new_int8)
+                needs_rebuild = True
+
+        # Tunable params (no rebuild needed)
+        live_config = config.live
+        if "live" in updates:
+            live_updates = updates["live"]
+            if "det_every" in live_updates:
+                live_config = replace(live_config, det_every=int(live_updates["det_every"]))
+            if "match_threshold" in live_updates:
+                live_config = replace(
+                    live_config, match_threshold=float(live_updates["match_threshold"])
+                )
+
+        matching_config = config.matching
+        if "matching" in updates and "threshold" in updates["matching"]:
+            matching_config = replace(
+                matching_config, threshold=float(updates["matching"]["threshold"])
+            )
+
+        new_config = replace(
+            config,
+            detection=det_config,
+            alignment=align_config,
+            embedding=embed_config,
+            live=live_config,
+            matching=matching_config,
+        )
+        self.runtime.config = new_config  # type: ignore[misc]
+
+        if needs_rebuild:
+            try:
+                detector = create_detector(det_config)
+                aligner = create_aligner(align_config)
+                embedder = create_embedder(embed_config)
+                new_pipeline = FacePipeline(
+                    detector=detector,
+                    aligner=aligner,
+                    embedder=embedder,
+                    max_faces=live_config.max_faces,
+                )
+                self.runtime.swap_pipeline(new_pipeline)
+            except Exception as exc:
+                body = json.dumps({"error": str(exc)}).encode("utf-8")
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+        body = json.dumps({"ok": True, "rebuilt": needs_rebuild}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
@@ -712,3 +867,172 @@ def _format_enrollment_message(result: EnrollmentResult) -> str:
         lines.append("Rejected:")
         lines.extend(f"- {name}" for name in result.rejected_files)
     return "\n".join(lines)
+
+
+def _render_settings_page(config: AppConfig) -> str:
+    det_sel = lambda v: " selected" if config.detection.backend == v else ""  # noqa: E731
+    align_sel = lambda v: " selected" if config.alignment.method == v else ""  # noqa: E731
+    int8_checked = " checked" if config.embedding.quantize_int8 else ""
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings — Face Recognition</title>
+  <style>
+    :root {{ color-scheme: dark; --bg: #000; --border: #333;
+      --text: #eee; --muted: #999; }}
+    body {{ margin: 0; font-family: system-ui, sans-serif;
+      color: var(--text); background: var(--bg); }}
+    main {{ width: min(100%, 720px); margin: 0 auto; padding: 1rem; }}
+    a {{ color: var(--text); text-decoration: underline; }}
+    nav {{ display: flex; gap: 1.5rem; padding: 0 0 1rem;
+      border-bottom: 1px solid var(--border); margin-bottom: 1rem; }}
+    nav strong {{ font-size: 1.1rem; margin-right: auto; }}
+    nav a {{ font-size: 0.9rem; color: var(--muted); }}
+    h1 {{ font-size: 1.2rem; margin: 0 0 1.5rem; }}
+    h2 {{ font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--muted); font-weight: 600; margin: 1.5rem 0 0.75rem; }}
+    h2:first-of-type {{ margin-top: 0; }}
+    .field {{ display: grid; grid-template-columns: 180px 1fr; gap: 0.5rem;
+      align-items: center; margin-bottom: 0.75rem; }}
+    .field label {{ font-size: 0.9rem; color: var(--muted); }}
+    select, input[type="number"], input[type="range"] {{
+      padding: 0.45rem; border-radius: 4px;
+      border: 1px solid var(--border); background: #111; color: var(--text);
+      font: inherit; width: 100%; box-sizing: border-box; }}
+    input[type="checkbox"] {{ width: 18px; height: 18px; }}
+    button {{ padding: 0.65rem 1.5rem; border-radius: 4px;
+      border: 1px solid var(--border); background: var(--text); color: #000;
+      font-weight: 700; cursor: pointer; font: inherit; margin-top: 1rem; }}
+    .status {{ margin-top: 0.75rem; font-size: 0.9rem; min-height: 1.4em; }}
+    .status.ok {{ color: #4c4; }}
+    .status.err {{ color: #e55; }}
+  </style>
+</head>
+<body>
+  <main>
+    <nav>
+      <strong>Face Recognition</strong>
+      <a href="/">Live Feed</a>
+      <a href="/gallery">Gallery</a>
+      <a href="/metrics.json">Metrics</a>
+    </nav>
+    <h1>Pipeline Settings</h1>
+    <form id="settings-form" onsubmit="return applySettings(event)">
+
+      <h2>Detection</h2>
+      <div class="field">
+        <label for="det-backend">Backend</label>
+        <select id="det-backend" name="detection.backend">
+          <option value="insightface"{det_sel("insightface")}>SCRFD (insightface)</option>
+          <option value="ultraface"{det_sel("ultraface")}>UltraFace (fast)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="det-every">Det every N frames</label>
+        <input type="number" id="det-every" name="live.det_every"
+               value="{config.live.det_every}" min="1" max="10">
+      </div>
+
+      <h2>Alignment</h2>
+      <div class="field">
+        <label for="align-method">Method</label>
+        <select id="align-method" name="alignment.method">
+          <option value="cv2"{align_sel("cv2")}>cv2 (LMEDS)</option>
+          <option value="skimage"{align_sel("skimage")}>skimage</option>
+        </select>
+      </div>
+
+      <h2>Embedding</h2>
+      <div class="field">
+        <label for="int8">INT8 quantize</label>
+        <input type="checkbox" id="int8" name="embedding.quantize_int8"{int8_checked}>
+      </div>
+
+      <h2>Matching</h2>
+      <div class="field">
+        <label for="threshold">Threshold</label>
+        <input type="number" id="threshold" name="matching.threshold"
+               value="{config.matching.threshold}" min="0.1" max="0.9" step="0.05">
+      </div>
+
+      <h2>Tracking</h2>
+      <div class="field">
+        <label for="max-missed">Max missed frames</label>
+        <input type="number" id="max-missed" name="tracking.max_missed"
+               value="{config.tracking.max_missed}" min="1" max="10">
+      </div>
+      <div class="field">
+        <label for="smoothing">Smoothing</label>
+        <input type="number" id="smoothing" name="tracking.smoothing"
+               value="{config.tracking.smoothing}" min="0" max="1" step="0.05">
+      </div>
+
+      <h2>Enrichment</h2>
+      <div class="field">
+        <label for="enrich-quality">Min quality</label>
+        <input type="number" id="enrich-quality" name="gallery.enrich_min_quality"
+               value="{config.gallery.enrich_min_quality}" min="0" max="1" step="0.05">
+      </div>
+      <div class="field">
+        <label for="enrich-cooldown">Cooldown (s)</label>
+        <input type="number" id="enrich-cooldown" name="gallery.enrich_cooldown_seconds"
+               value="{config.gallery.enrich_cooldown_seconds}" min="1" max="120" step="1">
+      </div>
+
+      <button type="submit">Apply Changes</button>
+      <div id="status" class="status"></div>
+    </form>
+  </main>
+  <script>
+    async function applySettings(e) {{
+      e.preventDefault();
+      const status = document.getElementById("status");
+      status.textContent = "Applying...";
+      status.className = "status";
+
+      const payload = {{
+        detection: {{
+          backend: document.getElementById("det-backend").value,
+        }},
+        alignment: {{
+          method: document.getElementById("align-method").value,
+        }},
+        embedding: {{
+          quantize_int8: document.getElementById("int8").checked,
+        }},
+        matching: {{
+          threshold: parseFloat(document.getElementById("threshold").value),
+        }},
+        live: {{
+          det_every: parseInt(document.getElementById("det-every").value),
+          match_threshold: parseFloat(document.getElementById("threshold").value),
+        }},
+      }};
+
+      try {{
+        const resp = await fetch("/api/config", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify(payload),
+        }});
+        const data = await resp.json();
+        if (resp.ok) {{
+          status.textContent = data.rebuilt
+            ? "Applied — pipeline rebuilt"
+            : "Applied — parameters updated";
+          status.className = "status ok";
+        }} else {{
+          status.textContent = "Error: " + (data.error || resp.statusText);
+          status.className = "status err";
+        }}
+      }} catch (err) {{
+        status.textContent = "Network error: " + err.message;
+        status.className = "status err";
+      }}
+    }}
+  </script>
+</body>
+</html>"""
