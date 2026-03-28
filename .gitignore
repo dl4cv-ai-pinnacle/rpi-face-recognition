@@ -1,9 +1,3 @@
-# Project-specific
-models/*.mnn
-models/*.onnx
-data/*.db
-data/*.index
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
