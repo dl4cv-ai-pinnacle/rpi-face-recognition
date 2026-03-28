@@ -1,0 +1,18 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --project slop/valenia --group dev ruff format --config slop/valenia/pyproject.toml
+        language: system
+        types_or: [python]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --project slop/valenia --group dev ruff check --fix --config slop/valenia/pyproject.toml
+        language: system
+        types_or: [python]
+      - id: pyright
+        name: pyright
+        entry: uv run --project slop/valenia --group dev pyright -p slop/valenia --pythonpath /usr/bin/python3
+        language: system
+        pass_filenames: false

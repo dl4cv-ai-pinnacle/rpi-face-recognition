@@ -1,0 +1,33 @@
+{
+  "a": {
+    "label": "fp32",
+    "avg_loop_ms": 52.765,
+    "avg_detect_ms": 22.584,
+    "avg_embed_ms": 29.248,
+    "avg_faces": 1.0,
+    "avg_fps": 18.952
+  },
+  "b": {
+    "label": "int8",
+    "avg_loop_ms": 52.688,
+    "avg_detect_ms": 22.833,
+    "avg_embed_ms": 28.954,
+    "avg_faces": 1.0,
+    "avg_fps": 18.98
+  },
+  "delta": {
+    "avg_loop_ms": -0.07686453318456188,
+    "avg_detect_ms": 0.24936280096881092,
+    "avg_embed_ms": -0.29381406639004126,
+    "avg_fps": 0.027648373147055594
+  },
+  "config": {
+    "image": "data/lena.jpg",
+    "runs": 30,
+    "warmup_runs": 5,
+    "ram_cap_mb": 4096.0
+  },
+  "notes": {
+    "memory_comparison": "Not reported here because both variants run in one process. Use benchmark_pipeline.py with --output-json for isolated RSS numbers."
+  }
+}
