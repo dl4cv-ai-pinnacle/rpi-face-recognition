@@ -73,6 +73,36 @@ server/
   templates/        Static HTML pages
 ```
 
+## Enrollment Flow
+
+Two enrollment paths feed into the same `runtime.enroll(name, uploads)` backend:
+
+### File Upload (Gallery Page)
+
+The gallery page has a multipart form that POSTs to `/enroll`. The handler parses
+the form, extracts `(filename, jpeg_bytes)` pairs, and delegates to the gallery.
+Best for enrolling from existing photos on disk.
+
+### Interactive Wizard (`/enroll-wizard`)
+
+A step-by-step guided capture from the live camera. The wizard walks the user
+through three poses:
+
+1. **Frontal** — look straight at the camera
+2. **Left turn** — turn head slightly to the left
+3. **Right turn** — turn head slightly to the right
+
+At each step, `POST /api/capture-frame` grabs the latest MJPEG frame, runs face
+detection, and returns the annotated frame + cropped face as base64 JPEG.  After
+all three captures, the user enters a name and `POST /api/enroll-captures` sends
+the base64 frames to `runtime.enroll()`.
+
+**Multi-pose rationale:** ArcFace embeddings are most robust when the gallery
+contains samples from diverse angles. A single frontal photo works for frontal
+matching but degrades quickly at 15-30 degree yaw. Three poses (frontal, left,
+right) cover the typical variation seen in live camera feeds and produce a
+quality-weighted mean template that matches reliably across angles.
+
 ## What Is Intentionally Avoided
 
 - No plugin registry or auto-discovery — backends are explicit in factory functions

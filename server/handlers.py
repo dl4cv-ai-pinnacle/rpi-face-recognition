@@ -5,6 +5,7 @@ Origin: Valenia scripts/live_camera_server.py — LiveCameraHandler + render fun
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 from email.parser import BytesParser
@@ -45,6 +46,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             "/gallery": self._serve_gallery,
             "/gallery/identity": lambda: self._serve_identity_detail(parsed.query),
             "/gallery/image": lambda: self._serve_gallery_image(parsed.query),
+            "/enroll-wizard": self._serve_enroll_wizard,
             "/stream.mjpg": self._serve_mjpeg,
             "/metrics.json": self._serve_metrics_json,
             "/style.css": self._serve_static_css,
@@ -68,6 +70,8 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             "/gallery/delete-identity": self._handle_gallery_delete_identity,
             "/gallery/delete-sample": self._handle_gallery_delete_sample,
             "/gallery/upload-samples": self._handle_gallery_upload_samples,
+            "/api/capture-frame": self._handle_api_capture_frame,
+            "/api/enroll-captures": self._handle_api_enroll_captures,
             "/api/config": self._handle_api_config_update,
         }
         handler = routes.get(parsed.path)
@@ -321,6 +325,10 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_enroll_wizard(self) -> None:
+        body = _render_enroll_wizard_page().encode("utf-8")
+        self._send_html(body)
+
     def _serve_identity_detail(self, query_string: str) -> None:
         params = parse_qs(query_string, keep_blank_values=False)
         slug = params.get("slug", [""])[0]
@@ -409,6 +417,118 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             )
             return
         self._redirect(f"/gallery/identity?slug={quote(result.slug)}")
+
+    def _handle_api_capture_frame(self) -> None:
+        """POST /api/capture-frame — grab the latest frame, run detection, return JSON."""
+        snapshot = self.streamer.wait_for_frame(last_seen=-1, timeout=3.0)
+        no_face = {
+            "face_detected": False,
+            "face_count": 0,
+            "jpeg_base64": "",
+            "face_jpeg_base64": None,
+        }
+        if snapshot.error is not None or snapshot.jpeg_bytes is None:
+            self._send_json(no_face)
+            return
+
+        import cv2
+        import numpy as np
+
+        jpeg_arr = np.frombuffer(snapshot.jpeg_bytes, dtype=np.uint8)
+        decoded = cv2.imdecode(jpeg_arr, cv2.IMREAD_COLOR)
+        if decoded is None:
+            self._send_json(no_face)
+            return
+        frame_bgr = np.asarray(decoded, dtype=np.uint8)
+
+        det_result, _ = self.runtime.pipeline.detect(frame_bgr)
+        face_count = len(det_result.boxes)
+
+        # Encode the full annotated frame as base64 JPEG.
+        full_b64 = base64.b64encode(snapshot.jpeg_bytes).decode("ascii")
+
+        # Crop the first detected face for the thumbnail preview.
+        face_b64: str | None = None
+        if face_count > 0:
+            box = det_result.boxes[0]
+            h, w = frame_bgr.shape[:2]
+            x1 = max(0, int(float(box[0])))
+            y1 = max(0, int(float(box[1])))
+            x2 = min(w, int(float(box[2])))
+            y2 = min(h, int(float(box[3])))
+            if x2 > x1 and y2 > y1:
+                face_crop = frame_bgr[y1:y2, x1:x2]
+                ok, enc = cv2.imencode(".jpg", face_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                if ok:
+                    face_b64 = base64.b64encode(enc.tobytes()).decode("ascii")
+
+        self._send_json({
+            "face_detected": face_count > 0,
+            "face_count": face_count,
+            "jpeg_base64": full_b64,
+            "face_jpeg_base64": face_b64,
+        })
+
+    def _handle_api_enroll_captures(self) -> None:
+        """POST /api/enroll-captures — enroll from base64-encoded captured frames."""
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send_json({"error": "Invalid Content-Length"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        payload = self.rfile.read(max(0, content_length))
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._send_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        name = data.get("name", "").strip()
+        captures = data.get("captures", [])
+        if not name:
+            self._send_json({"error": "Name is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not captures or not isinstance(captures, list):
+            self._send_json(
+                {"error": "At least one capture is required"}, status=HTTPStatus.BAD_REQUEST
+            )
+            return
+
+        uploads: list[tuple[str, bytes]] = []
+        for idx, b64_str in enumerate(captures):
+            if not isinstance(b64_str, str):
+                self._send_json(
+                    {"error": f"Capture {idx + 1} is not a valid base64 string"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            try:
+                jpeg_bytes = base64.b64decode(b64_str)
+            except Exception:
+                self._send_json(
+                    {"error": f"Capture {idx + 1} has invalid base64 encoding"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            uploads.append((f"capture_{idx + 1}.jpg", jpeg_bytes))
+
+        try:
+            result = self.runtime.enroll(name, uploads)
+        except Exception as exc:
+            self._send_json(
+                {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+            return
+
+        self._send_json({
+            "ok": True,
+            "name": result.name,
+            "slug": result.slug,
+            "sample_count": result.sample_count,
+            "accepted_files": list(result.accepted_files),
+            "rejected_files": list(result.rejected_files),
+        })
 
     # -- Helpers -------------------------------------------------------
 
@@ -502,6 +622,17 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_json(
+        self, data: object, *, status: HTTPStatus = HTTPStatus.OK
+    ) -> None:
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _redirect(self, location: str) -> None:
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", location)
@@ -538,6 +669,7 @@ def _page_shell(title: str, content: str, *, current: str = "") -> str:
     nav = "\n      ".join([
         _nav_link("/", "Live Feed"),
         _nav_link("/gallery", "Gallery"),
+        _nav_link("/enroll-wizard", "Enroll"),
         _nav_link("/settings", "Settings"),
         _nav_link("/metrics.json", "Metrics"),
     ])
@@ -611,6 +743,9 @@ def _render_gallery_page(
           multiple required></label>
         <button type="submit">Enroll</button>
       </form>
+      <p style="color:var(--muted);font-size:0.85rem;margin:0.75rem 0 0">
+        Or use the camera: <a href="/enroll-wizard">Enroll with Camera</a>
+        &mdash; guided multi-pose capture for best recognition quality.</p>
     </section>
     <div class="columns">
       <section>
@@ -934,3 +1069,218 @@ def _render_settings_page(config: AppConfig) -> str:
     }}
   </script>"""
     return _page_shell("Settings", content, current="/settings")
+
+
+def _render_enroll_wizard_page() -> str:
+    content = """<h1>Enroll with Camera</h1>
+    <p style="color:var(--muted);font-size:0.9rem;margin:0 0 1rem;line-height:1.5">
+      Capture 3 photos from different angles for robust recognition.
+      Position yourself in front of the camera and follow the instructions.</p>
+
+    <div class="wizard">
+      <div class="wizard-steps">
+        <div class="wizard-step active" data-step="1">1. Frontal</div>
+        <div class="wizard-step" data-step="2">2. Left</div>
+        <div class="wizard-step" data-step="3">3. Right</div>
+      </div>
+
+      <div class="wizard-body">
+        <div class="wizard-stream">
+          <img src="/stream.mjpg" alt="Live camera feed" class="wizard-feed">
+          <div id="wizard-instruction" class="wizard-instruction">
+            Look straight at the camera</div>
+        </div>
+
+        <div class="wizard-controls">
+          <div id="wizard-captures" class="wizard-captures">
+            <div class="wizard-thumb-slot" data-slot="1">
+              <div class="wizard-thumb-empty">1</div>
+            </div>
+            <div class="wizard-thumb-slot" data-slot="2">
+              <div class="wizard-thumb-empty">2</div>
+            </div>
+            <div class="wizard-thumb-slot" data-slot="3">
+              <div class="wizard-thumb-empty">3</div>
+            </div>
+          </div>
+
+          <div id="wizard-actions" class="wizard-actions">
+            <button id="btn-capture" onclick="captureFrame()">Capture</button>
+          </div>
+
+          <div id="wizard-review" class="wizard-review" style="display:none">
+            <img id="review-img" class="wizard-review-img" alt="Captured face">
+            <div class="button-row">
+              <button onclick="retakeCapture()">Retake</button>
+              <button id="btn-next" onclick="nextStep()">Next</button>
+            </div>
+          </div>
+
+          <div id="wizard-enroll" class="wizard-enroll" style="display:none">
+            <label style="display:grid;gap:0.25rem;font-size:0.85rem;color:var(--muted)">
+              Name
+              <input type="text" id="enroll-name" required
+                     placeholder="Enter name for enrollment">
+            </label>
+            <button onclick="submitEnrollment()">Enroll</button>
+          </div>
+
+          <div id="wizard-status" class="status"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    (function() {
+      const STEPS = [
+        "Look straight at the camera",
+        "Turn your head slightly to the left",
+        "Turn your head slightly to the right",
+      ];
+
+      let currentStep = 0;  // 0-indexed
+      let captures = [null, null, null];  // base64 JPEG strings
+      let faceThumbs = [null, null, null];  // base64 face crops for preview
+      let capturing = false;
+
+      window.captureFrame = async function() {
+        if (capturing) return;
+        capturing = true;
+        const btn = document.getElementById("btn-capture");
+        btn.textContent = "Capturing...";
+        btn.disabled = true;
+
+        try {
+          const resp = await fetch("/api/capture-frame", { method: "POST" });
+          const data = await resp.json();
+          if (!data.face_detected) {
+            showStatus("No face detected. Adjust position and try again.", "err");
+            btn.textContent = "Capture";
+            btn.disabled = false;
+            capturing = false;
+            return;
+          }
+          if (data.face_count > 1) {
+            showStatus("Multiple faces detected. Only one person should be visible.", "err");
+            btn.textContent = "Capture";
+            btn.disabled = false;
+            capturing = false;
+            return;
+          }
+
+          captures[currentStep] = data.jpeg_base64;
+          faceThumbs[currentStep] = data.face_jpeg_base64;
+
+          // Show review
+          const reviewImg = document.getElementById("review-img");
+          reviewImg.src = "data:image/jpeg;base64," + (data.face_jpeg_base64 || data.jpeg_base64);
+          document.getElementById("wizard-actions").style.display = "none";
+          document.getElementById("wizard-review").style.display = "";
+
+          // Update thumbnail
+          updateThumb(currentStep);
+
+          // Change "Next" to "Finish" on last step
+          document.getElementById("btn-next").textContent =
+            currentStep === 2 ? "Finish" : "Next";
+
+          showStatus("", "");
+        } catch (err) {
+          showStatus("Network error: " + err.message, "err");
+        }
+        btn.textContent = "Capture";
+        btn.disabled = false;
+        capturing = false;
+      };
+
+      window.retakeCapture = function() {
+        captures[currentStep] = null;
+        faceThumbs[currentStep] = null;
+        resetThumb(currentStep);
+        document.getElementById("wizard-review").style.display = "none";
+        document.getElementById("wizard-actions").style.display = "";
+        showStatus("", "");
+      };
+
+      window.nextStep = function() {
+        document.getElementById("wizard-review").style.display = "none";
+
+        if (currentStep < 2) {
+          // Advance to next step
+          currentStep++;
+          updateStepUI();
+          document.getElementById("wizard-actions").style.display = "";
+        } else {
+          // All 3 captured — show enroll form
+          document.getElementById("wizard-actions").style.display = "none";
+          document.getElementById("wizard-enroll").style.display = "";
+          document.getElementById("enroll-name").focus();
+        }
+      };
+
+      window.submitEnrollment = async function() {
+        const name = document.getElementById("enroll-name").value.trim();
+        if (!name) {
+          showStatus("Name is required.", "err");
+          return;
+        }
+        const validCaptures = captures.filter(function(c) { return c !== null; });
+        if (validCaptures.length === 0) {
+          showStatus("No captures available.", "err");
+          return;
+        }
+
+        showStatus("Enrolling...", "");
+        try {
+          const resp = await fetch("/api/enroll-captures", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: name, captures: validCaptures }),
+          });
+          const data = await resp.json();
+          if (resp.ok && data.ok) {
+            showStatus(
+              "Enrolled " + data.name + " with " + data.sample_count + " samples.", "ok"
+            );
+            setTimeout(function() { window.location.href = "/gallery"; }, 1500);
+          } else {
+            showStatus("Error: " + (data.error || "Unknown error"), "err");
+          }
+        } catch (err) {
+          showStatus("Network error: " + err.message, "err");
+        }
+      };
+
+      function updateStepUI() {
+        document.getElementById("wizard-instruction").textContent = STEPS[currentStep];
+        var stepEls = document.querySelectorAll(".wizard-step");
+        for (var i = 0; i < stepEls.length; i++) {
+          stepEls[i].classList.toggle("active", i === currentStep);
+          stepEls[i].classList.toggle("done", captures[i] !== null && i !== currentStep);
+        }
+      }
+
+      function updateThumb(idx) {
+        var slot = document.querySelector('.wizard-thumb-slot[data-slot="' + (idx + 1) + '"]');
+        if (!slot) return;
+        var src = faceThumbs[idx] || captures[idx];
+        if (src) {
+          slot.innerHTML = '<img class="wizard-thumb-img" src="data:image/jpeg;base64,' +
+            src + '" alt="Capture ' + (idx + 1) + '">';
+        }
+      }
+
+      function resetThumb(idx) {
+        var slot = document.querySelector('.wizard-thumb-slot[data-slot="' + (idx + 1) + '"]');
+        if (!slot) return;
+        slot.innerHTML = '<div class="wizard-thumb-empty">' + (idx + 1) + '</div>';
+      }
+
+      function showStatus(msg, cls) {
+        var el = document.getElementById("wizard-status");
+        el.textContent = msg;
+        el.className = "status" + (cls ? " " + cls : "");
+      }
+    })();
+    </script>"""
+    return _page_shell("Enroll with Camera", content, current="/enroll-wizard")
