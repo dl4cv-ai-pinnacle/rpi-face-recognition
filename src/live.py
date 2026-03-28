@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
+from src.alignment import center_crop_fallback
 from src.config import AppConfig
 from src.contracts import Float32Array, GalleryLike, PipelineLike, UInt8Array
 from src.gallery import EnrollmentResult, GalleryMatch, IdentityRecord, UnknownRecord
@@ -200,10 +201,19 @@ class LiveRuntime:
             match = state.match if state is not None else None
             if self._should_refresh_embedding(track, state):
                 landmarks = track.kps
-                if landmarks is None:
-                    overlay_faces.append(OverlayFace(track=track, match=match))
-                    continue
-                emb, emb_ms = pipeline.embed_from_kps(frame_bgr, landmarks)
+                if landmarks is not None:
+                    emb, emb_ms = pipeline.embed_from_kps(frame_bgr, landmarks)
+                else:
+                    crop = center_crop_fallback(
+                        frame_bgr,
+                        float(track.box[0]),
+                        float(track.box[1]),
+                        float(track.box[2]),
+                        float(track.box[3]),
+                    )
+                    t0 = time.perf_counter()
+                    emb = pipeline.embedder.get_embedding(crop)  # type: ignore[union-attr]
+                    emb_ms = (time.perf_counter() - t0) * 1000.0
                 embed_ms_total += emb_ms
                 refreshes += 1
                 new_match = self.gallery.match(emb, self.config.live.match_threshold)
@@ -289,7 +299,7 @@ class LiveRuntime:
     def _should_refresh_embedding(
         self, track: Track, state: _TrackIdentityState | None
     ) -> bool:
-        if track.kps is None or not track.matched:
+        if not track.matched:
             return False
         if state is None:
             return True
