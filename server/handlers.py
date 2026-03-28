@@ -600,6 +600,10 @@ def _render_gallery_page(
 
     content = f"""<section class="enroll-section">
       <h2>Enroll Identity</h2>
+      <p style="color:var(--muted);font-size:0.9rem;margin:0 0 0.75rem;line-height:1.5">
+        For best recognition across different angles, upload <strong>3-5 photos</strong>
+        from different poses: frontal, slight left, slight right. Each photo must
+        contain exactly one clearly visible face.</p>
       <form class="enroll-form" action="/enroll" method="post"
             enctype="multipart/form-data">
         <label>Name <input type="text" name="name" required></label>
@@ -765,6 +769,8 @@ def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> s
                style="font-size:0.85rem;color:var(--muted)">
         <button type="submit">Upload Photos</button>
       </form>
+      <p style="color:var(--muted);font-size:0.8rem;margin:0">
+        Add photos from different angles to improve recognition.</p>
     </div>
     <h2>Samples</h2>
     <div class="sample-grid">{grid}</div>"""

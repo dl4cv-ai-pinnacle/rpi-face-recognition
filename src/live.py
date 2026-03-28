@@ -48,11 +48,18 @@ class LiveFrameResult:
     reuses: int
 
 
+_IDENTITY_HOLD_MISSES = 5  # consecutive re-embed misses before downgrading a known identity
+
+
 @dataclass(frozen=True)
 class _TrackIdentityState:
     match: GalleryMatch
     last_embed_frame: int
     last_embed_box: Float32Array
+    # Track-level identity persistence: once confirmed, hold through pose changes.
+    confirmed_slug: str | None = None  # slug of the confirmed identity (or None)
+    confirmed_score: float = 0.0  # score at confirmation time
+    consecutive_misses: int = 0  # how many re-embeds failed to match since confirmation
 
 
 class LiveRuntime:
@@ -218,27 +225,57 @@ class LiveRuntime:
                 refreshes += 1
                 new_match = self.gallery.match(emb, self.config.live.match_threshold)
                 current_box = np.asarray(track.box, dtype=np.float32)
-                if self._should_keep_previous_known_match(track, state, new_match):
+
+                # Track-level identity persistence.
+                prev_slug = state.confirmed_slug if state else None
+                prev_score = state.confirmed_score if state else 0.0
+                prev_misses = state.consecutive_misses if state else 0
+
+                if new_match.matched:
+                    # Fresh match — confirm (or re-confirm) this identity.
+                    match = new_match
+                    self._track_states[track.track_id] = _TrackIdentityState(
+                        match=match,
+                        last_embed_frame=self._frame_counter,
+                        last_embed_box=current_box,
+                        confirmed_slug=new_match.slug,
+                        confirmed_score=new_match.score,
+                        consecutive_misses=0,
+                    )
+                    self._try_enrich(new_match, emb, track.box, frame_bgr)
+                elif prev_slug is not None and prev_misses < _IDENTITY_HOLD_MISSES:
+                    # Was previously confirmed — hold identity through pose changes.
+                    # Keep showing the confirmed identity until consecutive misses
+                    # exceed the threshold.
                     match = state.match  # type: ignore[union-attr]
-                elif not new_match.matched:
-                    crop = _crop_face_region(frame_bgr, track.box)
-                    if crop is not None:
-                        match = self.gallery.capture_unknown(emb, crop)
+                    self._track_states[track.track_id] = _TrackIdentityState(
+                        match=match,
+                        last_embed_frame=self._frame_counter,
+                        last_embed_box=current_box,
+                        confirmed_slug=prev_slug,
+                        confirmed_score=prev_score,
+                        consecutive_misses=prev_misses + 1,
+                    )
+                else:
+                    # Never confirmed, or too many consecutive misses — treat as
+                    # unknown. Only capture if this track was NEVER identified
+                    # (don't fragment a known person into unknowns).
+                    if prev_slug is None:
+                        crop_region = _crop_face_region(frame_bgr, track.box)
+                        if crop_region is not None:
+                            match = self.gallery.capture_unknown(emb, crop_region)
+                        else:
+                            match = new_match
                     else:
                         match = new_match
                     self._track_states[track.track_id] = _TrackIdentityState(
                         match=match,
                         last_embed_frame=self._frame_counter,
                         last_embed_box=current_box,
+                        confirmed_slug=None,
+                        confirmed_score=0.0,
+                        consecutive_misses=0,
                     )
-                else:
-                    match = new_match
-                    self._track_states[track.track_id] = _TrackIdentityState(
-                        match=match,
-                        last_embed_frame=self._frame_counter,
-                        last_embed_box=current_box,
-                    )
-                    self._try_enrich(new_match, emb, track.box, frame_bgr)
             elif match is not None:
                 reuses += 1
             overlay_faces.append(OverlayFace(track=track, match=match))
@@ -311,26 +348,6 @@ class LiveRuntime:
         current_box = np.asarray(track.box, dtype=np.float32)
         iou = box_iou(current_box[:4], state.last_embed_box[:4])
         return iou < self.config.live.embed_refresh_iou
-
-    def _should_keep_previous_known_match(
-        self,
-        track: Track,
-        state: _TrackIdentityState | None,
-        new_match: GalleryMatch,
-    ) -> bool:
-        if new_match.matched or state is None:
-            return False
-        if not state.match.matched or state.match.name is None:
-            return False
-        frames_since = self._frame_counter - state.last_embed_frame
-        if frames_since > 1:
-            return False
-        prior_margin = state.match.score - self.config.live.match_threshold
-        if prior_margin < 0.08:
-            return False
-        current_box = np.asarray(track.box, dtype=np.float32)
-        grace_iou = max(0.9, self.config.live.embed_refresh_iou)
-        return box_iou(current_box[:4], state.last_embed_box[:4]) >= grace_iou
 
     def _should_run_detection(self) -> bool:
         interval = max(1, self.config.live.det_every)
