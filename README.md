@@ -12,20 +12,27 @@ cd rpi-face-recognition
 # 2. Install system deps (Pi only)
 sudo apt install -y python3-picamera2 python3-opencv
 
-# 3. Install Python deps
+# 3. Create a venv that can see Pi OS camera bindings from apt
+uv venv --python 3.13 --system-site-packages
+
+# 4. Install Python deps
 uv sync --python 3.13
 
-# 4. Download models
+# 5. Download models
 bash scripts/download_models.sh
 
-# 5. Install insightface (default detector)
+# 6. Install insightface (default detector)
 uv pip install insightface
 
-# 6. Start the live server
+# 7. Start the live server
 uv run --python 3.13 python -m server.app
 ```
 
 Open `http://<pi-ip>:8080/` in a browser to see the live dashboard.
+
+If you already created `.venv` without `--system-site-packages`, recreate it
+before starting the server so `uv run` can import `picamera2` and `libcamera`
+from the Pi OS packages installed via `apt`.
 
 ## Development (macOS/Linux)
 

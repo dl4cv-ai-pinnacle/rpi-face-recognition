@@ -27,6 +27,8 @@ Swappable: detection (insightface/ultraface), alignment (cv2/skimage), embedding
 ## Development
 
 - **Tooling:** `uv` for everything. Python ≥3.13. `uv run --python 3.13 pytest`, `uv run --python 3.13 pyright src/`, `uv run --python 3.13 ruff check src/`.
+- **Pi OS deps:** when a task needs Raspberry Pi camera or system libraries, install the required OS-level packages up front with `apt` rather than deferring them to the user. This includes things like `python3-picamera2`, `python3-opencv`, `libcap-dev`, and `libcamera` bindings when the setup path depends on them.
+- **uv + Pi bindings:** if the runtime needs `apt`-installed camera bindings, create the project venv with `uv venv --python 3.13 --system-site-packages` before `uv sync` so `uv run` can import those system modules.
 - **Typing:** Pyright strict mode. All public functions annotated.
 - **Linting:** Ruff with `E, F, I, UP, B, SIM` rules.
 - **Tests:** `tests/` — behavioral tests with DI stubs, no real ONNX models needed.
