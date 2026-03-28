@@ -1,0 +1,32 @@
+capture:
+  resolution: [640, 480]
+  detection_resolution: [320, 240]
+  format: "RGB888"
+
+detection:
+  model_path: "models/det_500m.onnx"
+  confidence_threshold: 0.5
+  nms_threshold: 0.4
+  input_size: [640, 640]
+
+alignment:
+  output_size: 112
+
+embedding:
+  model_path: "models/w600k_mbf.onnx"
+  embedding_dim: 512
+  input_size: 112
+
+matching:
+  db_path: "data/faces.db"
+  index_path: "data/faces.index"
+  threshold: 0.4
+
+display:
+  show_window: true
+  window_name: "Face Recognition"
+  box_color: [0, 255, 0]
+  text_color: [255, 255, 255]
+  unknown_label: "Unknown"
+
+log_level: "INFO"

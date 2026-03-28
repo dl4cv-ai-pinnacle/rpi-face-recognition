@@ -1,0 +1,10 @@
+# Core dependencies
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+PyYAML>=6.0
+scikit-image>=0.21.0
+faiss-cpu>=1.7.4
+onnxruntime>=1.17.0
+
+# Picamera2 -- installed via apt on RPi OS, not pip:
+#   sudo apt install python3-picamera2
