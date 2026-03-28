@@ -2,17 +2,39 @@
 
 Modular face recognition pipeline for Raspberry Pi 5. Swappable backends (detection, alignment, matching), live MJPEG dashboard, gallery with unknown-capture workflow, FAISS matching.
 
-## Quick Start (Raspberry Pi)
+## Quick Start (Raspberry Pi) — One Command
+
+```bash
+git clone https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition.git
+cd rpi-face-recognition
+bash scripts/service.sh setup
+```
+
+This handles everything from zero: installs system packages, uv, Python deps, insightface, downloads models, creates a systemd service, and starts it. Dashboard will be at `http://<pi-ip>:8080/`.
+
+### Service Management
+
+```bash
+bash scripts/service.sh up       # Start (creates systemd unit if needed)
+bash scripts/service.sh down     # Stop
+bash scripts/service.sh restart  # Restart
+bash scripts/service.sh status   # Show status
+bash scripts/service.sh logs     # Follow logs (Ctrl+C to stop)
+```
+
+### Manual Setup (step by step)
+
+If you prefer manual control:
 
 ```bash
 # 1. Clone and enter
 git clone https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition.git
 cd rpi-face-recognition
 
-# 2. Install system deps (Pi only)
-sudo apt install -y python3-picamera2 python3-opencv
+# 2. Install system deps
+sudo apt install -y python3-picamera2 python3-opencv python3-libcamera
 
-# 3. Create a venv that can see Pi OS camera bindings from apt
+# 3. Create venv with system-site-packages (needed for Pi camera bindings)
 uv venv --python 3.13 --system-site-packages
 
 # 4. Install Python deps
@@ -28,11 +50,7 @@ uv pip install insightface
 uv run --python 3.13 python -m server.app
 ```
 
-Open `http://<pi-ip>:8080/` in a browser to see the live dashboard.
-
-If you already created `.venv` without `--system-site-packages`, recreate it
-before starting the server so `uv run` can import `picamera2` and `libcamera`
-from the Pi OS packages installed via `apt`.
+Open `http://<pi-ip>:8080/` in a browser.
 
 ## Development (macOS/Linux)
 
