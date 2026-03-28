@@ -30,7 +30,7 @@ Backends are selected via `config.yaml` and can be changed at runtime through th
 
 | Stage | Default | Alternative | Config key |
 |---|---|---|---|
-| Detection | insightface SCRFD | UltraFace-slim-320 | `detection.backend` |
+| Detection | insightface SCRFD (landmarks) | UltraFace-slim-320 (no landmarks, uses center-crop for recognition) | `detection.backend` |
 | Alignment | cv2 (LMEDS) | skimage (SimilarityTransform) | `alignment.method` |
 | Embedding | MobileFaceNet FP32 | MobileFaceNet INT8 | `embedding.quantize_int8` |
 

@@ -56,7 +56,7 @@ All settings in `config.yaml`. Key options:
 
 ```yaml
 detection:
-  backend: "insightface"    # or "ultraface" for 3x faster, lower accuracy
+  backend: "insightface"    # or "ultraface" for 3x faster (recognition works via center-crop)
 
 alignment:
   method: "cv2"             # or "skimage" for research flexibility
@@ -71,7 +71,7 @@ embedding:
 Camera → Detection → Tracking → Alignment → Embedding → FAISS Matching → Gallery
 ```
 
-- **Detection:** insightface SCRFD (default, accurate) or UltraFace (fast fallback)
+- **Detection:** insightface SCRFD (default, accurate, with landmarks) or UltraFace (3x faster, recognition via center-crop)
 - **Alignment:** cv2 LMEDS (default) or skimage SimilarityTransform
 - **Embedding:** MobileFaceNet ArcFace, 512-dim, optional INT8
 - **Matching:** FAISS IndexFlatIP over quality-weighted mean templates
