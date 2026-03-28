@@ -542,6 +542,12 @@ def _page_shell(title: str, content: str, *, current: str = "") -> str:
         _nav_link("/metrics.json", "Metrics"),
     ])
 
+    repo_link = (
+        '<a href="https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition"'
+        ' target="_blank" style="margin-left:auto;font-size:0.8rem;color:var(--muted)">'
+        "GitHub</a>"
+    )
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -555,6 +561,7 @@ def _page_shell(title: str, content: str, *, current: str = "") -> str:
     <nav>
       <strong>Face Recognition</strong>
       {nav}
+      {repo_link}
     </nav>
     {content}
   </main>
@@ -804,6 +811,9 @@ def _render_settings_page(config: AppConfig) -> str:
           <option value="ultraface"{det_sel("ultraface")}>UltraFace (fast)</option>
         </select>
       </div>
+      <p id="det-warning" style="color:var(--danger);font-size:0.85rem;margin:0.25rem 0 0.5rem;
+        display:none">UltraFace has no landmarks — recognition uses center-crop fallback.
+        Quality is lower, especially for non-frontal faces. Re-enroll if switching detectors.</p>
       <div class="field">
         <label for="det-every">Det every N frames</label>
         <input type="number" id="det-every" name="live.det_every"
@@ -861,6 +871,15 @@ def _render_settings_page(config: AppConfig) -> str:
     </form>
   </main>
   <script>
+    // Show warning when UltraFace is selected.
+    (function() {{
+      const sel = document.getElementById("det-backend");
+      const warn = document.getElementById("det-warning");
+      function toggle() {{ warn.style.display = sel.value === "ultraface" ? "block" : "none"; }}
+      sel.addEventListener("change", toggle);
+      toggle();
+    }})();
+
     async function applySettings(e) {{
       e.preventDefault();
       const status = document.getElementById("status");
