@@ -47,6 +47,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             "/gallery/image": lambda: self._serve_gallery_image(parsed.query),
             "/stream.mjpg": self._serve_mjpeg,
             "/metrics.json": self._serve_metrics_json,
+            "/style.css": self._serve_static_css,
             "/api/config": self._serve_api_config,
             "/api/config/backends": self._serve_api_backends,
         }
@@ -92,6 +93,16 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_static_css(self) -> None:
+        css_path = _TEMPLATE_DIR / "style.css"
+        body = css_path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/css; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=3600")
         self.end_headers()
         self.wfile.write(body)
 
@@ -513,40 +524,54 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
 
 
 # ---------------------------------------------------------------------------
-# HTML render functions (extracted from Valenia's server monolith)
+# HTML render functions — all use _page_shell for consistent layout
 # ---------------------------------------------------------------------------
 
 
-def _render_message_page(title: str, message: str) -> str:
-    safe_title = html.escape(title)
-    safe_message = html.escape(message)
+def _page_shell(title: str, content: str, *, current: str = "") -> str:
+    """Wrap content in shared HTML boilerplate with consistent nav."""
+
+    def _nav_link(href: str, label: str) -> str:
+        aria = ' aria-current="page"' if href == current else ""
+        return f'<a href="{href}"{aria}>{label}</a>'
+
+    nav = "\n      ".join([
+        _nav_link("/", "Live Feed"),
+        _nav_link("/gallery", "Gallery"),
+        _nav_link("/settings", "Settings"),
+        _nav_link("/metrics.json", "Metrics"),
+    ])
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{safe_title}</title>
-  <style>
-    body {{ margin: 0; font-family: system-ui, sans-serif;
-      background: #000; color: #eee; min-height: 100vh;
-      display: grid; place-items: center; }}
-    main {{ width: min(100%, 720px); padding: 1rem; box-sizing: border-box; }}
-    a {{ color: #eee; text-decoration: underline; }}
-    pre {{ white-space: pre-wrap; color: #999; }}
-    .links {{ display: flex; gap: 1.5rem; margin-top: 1rem; font-size: 0.9rem; }}
-  </style>
+  <title>{html.escape(title)} — Face Recognition</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <main>
-    <h1>{safe_title}</h1>
+    <nav>
+      <strong>Face Recognition</strong>
+      {nav}
+    </nav>
+    {content}
+  </main>
+</body>
+</html>"""
+
+
+def _render_message_page(title: str, message: str) -> str:
+    safe_title = html.escape(title)
+    safe_message = html.escape(message)
+    content = f"""<h1>{safe_title}</h1>
     <pre>{safe_message}</pre>
     <div class="links">
       <a href="/">Live feed</a>
       <a href="/gallery">Gallery</a>
-    </div>
-  </main>
-</body>
-</html>"""
+    </div>"""
+    return _page_shell(title, content)
 
 
 def _render_gallery_page(
@@ -566,61 +591,7 @@ def _render_gallery_page(
     if not unknown_cards:
         unknown_cards = '<p class="empty">No auto-captured unknowns yet.</p>'
 
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gallery</title>
-  <style>
-    :root {{ color-scheme: dark; --bg: #000; --border: #333;
-      --text: #eee; --muted: #999; --danger: #e55; }}
-    body {{ margin: 0; font-family: system-ui, sans-serif;
-      color: var(--text); background: var(--bg); }}
-    main {{ width: min(100%, 1380px); margin: 0 auto; padding: 1rem; }}
-    a {{ color: var(--text); text-decoration: underline; }}
-    nav {{ display: flex; gap: 1.5rem; padding: 0 0 1rem;
-      border-bottom: 1px solid var(--border); margin-bottom: 1rem; flex-wrap: wrap; }}
-    nav strong {{ font-size: 1.1rem; margin-right: auto; }}
-    nav a {{ font-size: 0.9rem; color: var(--muted); }}
-    h2 {{ font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--muted); font-weight: 600; }}
-    .columns {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }}
-    .card {{ display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 0.75rem;
-      padding: 0.75rem 0; border-bottom: 1px solid #1a1a1a; }}
-    .thumb {{ width: 100px; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }}
-    .thumb.empty {{ display: grid; place-items: center; border: 1px solid var(--border);
-      color: var(--muted); font-size: 0.8rem; }}
-    .card-name {{ margin: 0; font-size: 1rem; text-transform: none; letter-spacing: 0; }}
-    .meta {{ color: var(--muted); font-size: 0.85rem; }}
-    form {{ display: grid; gap: 0.5rem; margin-top: 0.4rem; }}
-    input, button {{ font: inherit; }}
-    input[type="text"], input[type="file"] {{ padding: 0.5rem; border-radius: 4px;
-      border: 1px solid var(--border); background: #111; color: var(--text); }}
-    .button-row {{ display: flex; flex-wrap: wrap; gap: 0.5rem; }}
-    button {{ width: fit-content; padding: 0.55rem 0.85rem; border-radius: 4px;
-      border: 1px solid var(--border); background: var(--text); color: #000;
-      font-weight: 700; cursor: pointer; }}
-    button.delete {{ background: transparent; color: #fcc;
-      border-color: rgba(238, 85, 85, 0.3); }}
-    .empty {{ color: var(--muted); }}
-    .enroll-section {{ margin-bottom: 1.5rem; padding-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border); }}
-    .enroll-form {{ display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; }}
-    .enroll-form label {{ display: grid; gap: 0.25rem; font-size: 0.85rem;
-      color: var(--muted); }}
-    @media (max-width: 980px) {{ .columns {{ grid-template-columns: 1fr; }} }}
-  </style>
-</head>
-<body>
-  <main>
-    <nav>
-      <strong>Face Recognition</strong>
-      <a href="/">Live Feed</a>
-      <a href="/stream.mjpg">Stream</a>
-      <a href="/metrics.json">Metrics</a>
-    </nav>
-    <section class="enroll-section">
+    content = f"""<section class="enroll-section">
       <h2>Enroll Identity</h2>
       <form class="enroll-form" action="/enroll" method="post"
             enctype="multipart/form-data">
@@ -639,10 +610,8 @@ def _render_gallery_page(
         <h2>Unknown Review Inbox</h2>
         <div>{unknown_cards}</div>
       </section>
-    </div>
-  </main>
-</body>
-</html>"""
+    </div>"""
+    return _page_shell("Gallery", content, current="/gallery")
 
 
 def _render_identity_card(record: IdentityRecord) -> str:
@@ -766,54 +735,7 @@ def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> s
 
     grid = "\n".join(image_cards) if image_cards else '<p class="empty">No samples.</p>'
 
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{name} — Gallery</title>
-  <style>
-    :root {{ color-scheme: dark; --bg: #000; --border: #333;
-      --text: #eee; --muted: #999; }}
-    body {{ margin: 0; font-family: system-ui, sans-serif;
-      color: var(--text); background: var(--bg); }}
-    main {{ width: min(100%, 1380px); margin: 0 auto; padding: 1rem; }}
-    a {{ color: var(--text); text-decoration: underline; }}
-    nav {{ display: flex; gap: 1.5rem; padding: 0 0 1rem;
-      border-bottom: 1px solid var(--border); margin-bottom: 1rem; }}
-    nav strong {{ font-size: 1.1rem; margin-right: auto; }}
-    nav a {{ font-size: 0.9rem; color: var(--muted); }}
-    .meta {{ color: var(--muted); font-size: 0.85rem; }}
-    form {{ display: grid; gap: 0.5rem; margin-top: 0.4rem; }}
-    input, button {{ font: inherit; }}
-    input[type="text"] {{ padding: 0.5rem; border-radius: 4px;
-      border: 1px solid var(--border); background: #111; color: var(--text); }}
-    .button-row {{ display: flex; gap: 0.5rem; }}
-    button {{ padding: 0.55rem 0.85rem; border-radius: 4px;
-      border: 1px solid var(--border); background: var(--text); color: #000;
-      font-weight: 700; cursor: pointer; }}
-    button.delete {{ background: transparent; color: #fcc;
-      border-color: rgba(238,85,85,0.3); }}
-    .actions {{ display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end;
-      margin-bottom: 1.5rem; padding-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border); }}
-    .actions form {{ margin-top: 0; }}
-    .sample-grid {{ display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }}
-    .sample-img {{ width: 100%; aspect-ratio: 1; object-fit: cover;
-      border-radius: 4px; background: #111; }}
-    .sample-card form {{ margin-top: 0; }}
-    .empty {{ color: var(--muted); }}
-  </style>
-</head>
-<body>
-  <main>
-    <nav>
-      <strong>Face Recognition</strong>
-      <a href="/gallery">Gallery</a>
-      <a href="/">Live Feed</a>
-    </nav>
-    <h1 style="font-size:1.2rem">{name}</h1>
+    content = f"""<h1>{name}</h1>
     <p class="meta">{slug} &middot; {record.sample_count} samples</p>
     <div class="actions">
       <form action="/gallery/rename" method="post"
@@ -837,12 +759,9 @@ def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> s
         <button type="submit">Upload Photos</button>
       </form>
     </div>
-    <h2 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.06em;
-      color:var(--muted);font-weight:600">Samples</h2>
-    <div class="sample-grid">{grid}</div>
-  </main>
-</body>
-</html>"""
+    <h2>Samples</h2>
+    <div class="sample-grid">{grid}</div>"""
+    return _page_shell(name, content, current="/gallery")
 
 
 def _render_preview_image(kind: str, slug: str, filename: object) -> str:
@@ -874,52 +793,7 @@ def _render_settings_page(config: AppConfig) -> str:
     align_sel = lambda v: " selected" if config.alignment.method == v else ""  # noqa: E731
     int8_checked = " checked" if config.embedding.quantize_int8 else ""
 
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Settings — Face Recognition</title>
-  <style>
-    :root {{ color-scheme: dark; --bg: #000; --border: #333;
-      --text: #eee; --muted: #999; }}
-    body {{ margin: 0; font-family: system-ui, sans-serif;
-      color: var(--text); background: var(--bg); }}
-    main {{ width: min(100%, 720px); margin: 0 auto; padding: 1rem; }}
-    a {{ color: var(--text); text-decoration: underline; }}
-    nav {{ display: flex; gap: 1.5rem; padding: 0 0 1rem;
-      border-bottom: 1px solid var(--border); margin-bottom: 1rem; }}
-    nav strong {{ font-size: 1.1rem; margin-right: auto; }}
-    nav a {{ font-size: 0.9rem; color: var(--muted); }}
-    h1 {{ font-size: 1.2rem; margin: 0 0 1.5rem; }}
-    h2 {{ font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--muted); font-weight: 600; margin: 1.5rem 0 0.75rem; }}
-    h2:first-of-type {{ margin-top: 0; }}
-    .field {{ display: grid; grid-template-columns: 180px 1fr; gap: 0.5rem;
-      align-items: center; margin-bottom: 0.75rem; }}
-    .field label {{ font-size: 0.9rem; color: var(--muted); }}
-    select, input[type="number"], input[type="range"] {{
-      padding: 0.45rem; border-radius: 4px;
-      border: 1px solid var(--border); background: #111; color: var(--text);
-      font: inherit; width: 100%; box-sizing: border-box; }}
-    input[type="checkbox"] {{ width: 18px; height: 18px; }}
-    button {{ padding: 0.65rem 1.5rem; border-radius: 4px;
-      border: 1px solid var(--border); background: var(--text); color: #000;
-      font-weight: 700; cursor: pointer; font: inherit; margin-top: 1rem; }}
-    .status {{ margin-top: 0.75rem; font-size: 0.9rem; min-height: 1.4em; }}
-    .status.ok {{ color: #4c4; }}
-    .status.err {{ color: #e55; }}
-  </style>
-</head>
-<body>
-  <main>
-    <nav>
-      <strong>Face Recognition</strong>
-      <a href="/">Live Feed</a>
-      <a href="/gallery">Gallery</a>
-      <a href="/metrics.json">Metrics</a>
-    </nav>
-    <h1>Pipeline Settings</h1>
+    content = f"""<h1>Pipeline Settings</h1>
     <form id="settings-form" onsubmit="return applySettings(event)">
 
       <h2>Detection</h2>
@@ -1033,6 +907,5 @@ def _render_settings_page(config: AppConfig) -> str:
         status.className = "status err";
       }}
     }}
-  </script>
-</body>
-</html>"""
+  </script>"""
+    return _page_shell("Settings", content, current="/settings")
