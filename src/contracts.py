@@ -76,6 +76,9 @@ class DetectorLike(Protocol):
     @property
     def name(self) -> str: ...
 
+    @property
+    def provider_name(self) -> str: ...
+
     def detect(self, frame_bgr: UInt8Array, /) -> list[Detection]: ...
 
 
@@ -86,9 +89,7 @@ class AlignerLike(Protocol):
     @property
     def name(self) -> str: ...
 
-    def align(
-        self, frame_bgr: UInt8Array, landmarks: Float32Array, /
-    ) -> UInt8Array | None: ...
+    def align(self, frame_bgr: UInt8Array, landmarks: Float32Array, /) -> UInt8Array | None: ...
 
 
 @runtime_checkable
@@ -97,6 +98,9 @@ class EmbedderLike(Protocol):
 
     @property
     def name(self) -> str: ...
+
+    @property
+    def provider_name(self) -> str: ...
 
     def get_embedding(self, crop_bgr: UInt8Array, /) -> Float32Array: ...
 
@@ -138,6 +142,12 @@ class FrameResultLike(Protocol):
 class PipelineLike(Protocol):
     """Composite pipeline: detect + align + embed."""
 
+    @property
+    def detector(self) -> DetectorLike: ...
+
+    @property
+    def embedder(self) -> EmbedderLike: ...
+
     def detect(self, frame_bgr: UInt8Array, /) -> tuple[DetectionResultLike, float]: ...
 
     def embed_from_kps(
@@ -148,9 +158,7 @@ class PipelineLike(Protocol):
         self, frame_bgr: UInt8Array, /, max_faces: int | None = None
     ) -> FrameResultLike: ...
 
-    def step(
-        self, frame_bgr: UInt8Array, /, max_faces: int | None = None
-    ) -> FrameResultLike: ...
+    def step(self, frame_bgr: UInt8Array, /, max_faces: int | None = None) -> FrameResultLike: ...
 
 
 # ---------------------------------------------------------------------------
@@ -168,13 +176,19 @@ class GalleryLike(Protocol):
         self, name: str, uploads: list[tuple[str, bytes]], pipeline: PipelineLike, /
     ) -> EnrollmentResult: ...
 
+    def enroll_captured(
+        self,
+        name: str,
+        embeddings: list[Float32Array],
+        uploads: list[tuple[str, bytes]],
+        /,
+    ) -> EnrollmentResult: ...
+
     def match(self, embedding: Float32Array, threshold: float, /) -> GalleryMatch: ...
 
     def count(self) -> int: ...
 
-    def capture_unknown(
-        self, embedding: Float32Array, crop_bgr: UInt8Array, /
-    ) -> GalleryMatch: ...
+    def capture_unknown(self, embedding: Float32Array, crop_bgr: UInt8Array, /) -> GalleryMatch: ...
 
     def identities(self) -> list[IdentityRecord]: ...
 
@@ -182,6 +196,14 @@ class GalleryLike(Protocol):
 
     def upload_to_identity(
         self, slug: str, uploads: list[tuple[str, bytes]], pipeline: PipelineLike, /
+    ) -> EnrollmentResult: ...
+
+    def upload_captured_to_identity(
+        self,
+        slug: str,
+        embeddings: list[Float32Array],
+        uploads: list[tuple[str, bytes]],
+        /,
     ) -> EnrollmentResult: ...
 
     def rename_identity(self, slug: str, new_name: str, /) -> IdentityRecord: ...

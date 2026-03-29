@@ -64,10 +64,7 @@ class UltraFaceDetector:
         self._nms_threshold = config.nms_threshold
         model_path = Path(model_dir) / _MODEL_FILENAME
         if not model_path.exists():
-            msg = (
-                f"UltraFace model not found at {model_path}. "
-                "Run: bash scripts/download_models.sh"
-            )
+            msg = f"UltraFace model not found at {model_path}. Run: bash scripts/download_models.sh"
             raise FileNotFoundError(msg)
 
         so = ort.SessionOptions()
@@ -83,6 +80,11 @@ class UltraFaceDetector:
     @property
     def name(self) -> str:
         return "UltraFace-slim"
+
+    @property
+    def provider_name(self) -> str:
+        providers = self._session.get_providers()
+        return providers[0] if providers else "CPUExecutionProvider"
 
     def detect(self, frame_bgr: UInt8Array, /) -> list[Detection]:
         import cv2

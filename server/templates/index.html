@@ -67,10 +67,10 @@
     }
     h2, h3 {
       margin: 0 0 0.75rem;
-      font-size: 0.85rem;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--muted);
+      font-size: 0.9rem;
+      text-transform: none;
+      letter-spacing: 0.01em;
+      color: #c7c7c7;
       font-weight: 600;
     }
     .stream-wrap {
@@ -118,6 +118,86 @@
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
+    .action-panel {
+      padding: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: linear-gradient(180deg, #141414 0%, #0f0f0f 100%);
+      transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+    }
+    .action-panel.is-hidden {
+      display: none;
+    }
+    .action-panel.is-alert {
+      border-color: rgba(245, 177, 69, 0.7);
+      background: linear-gradient(180deg, rgba(58, 39, 8, 0.98) 0%, rgba(23, 16, 4, 0.98) 100%);
+      box-shadow: 0 0 0 1px rgba(245, 177, 69, 0.16), 0 12px 36px rgba(0, 0, 0, 0.28);
+      animation: alertPulse 1.8s ease-in-out infinite;
+    }
+    .action-panel.is-queue {
+      border-color: rgba(109, 146, 214, 0.6);
+      background: linear-gradient(180deg, rgba(12, 24, 48, 0.98) 0%, rgba(8, 16, 31, 0.98) 100%);
+      box-shadow: 0 0 0 1px rgba(109, 146, 214, 0.14), 0 12px 36px rgba(0, 0, 0, 0.28);
+    }
+    @keyframes alertPulse {
+      0%, 100% {
+        box-shadow: 0 0 0 1px rgba(245, 177, 69, 0.16), 0 12px 36px rgba(0, 0, 0, 0.28);
+      }
+      50% {
+        box-shadow: 0 0 0 1px rgba(245, 177, 69, 0.32), 0 0 0 8px rgba(245, 177, 69, 0.08), 0 16px 40px rgba(0, 0, 0, 0.34);
+      }
+    }
+    .action-kicker {
+      display: block;
+      margin-bottom: 0.35rem;
+      font-size: 0.82rem;
+      letter-spacing: 0.03em;
+      color: #fff2cf;
+      font-weight: 700;
+    }
+    .action-panel p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+    .action-buttons {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      margin-top: 0.85rem;
+    }
+    .action-buttons a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 2.4rem;
+      padding: 0 0.85rem;
+      border-radius: 999px;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .action-primary {
+      background: #f2f2f2;
+      color: #111;
+    }
+    .action-panel.is-alert .action-primary {
+      background: #ffd37c;
+      color: #171003;
+    }
+    .action-primary:hover {
+      color: #000;
+      background: #fff;
+    }
+    .action-secondary {
+      border: 1px solid var(--border);
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .action-secondary:hover {
+      border-color: #555;
+    }
     .metrics-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -128,12 +208,14 @@
       padding: 0.75rem;
       border: 1px solid var(--border);
       border-radius: 4px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, rgba(255, 255, 255, 0.01) 100%);
     }
     .metric-label {
       color: var(--muted);
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
+      font-size: 0.78rem;
+      text-transform: none;
+      letter-spacing: 0.01em;
+      font-weight: 600;
     }
     .metric-label[title],
     .list-key[title] {
@@ -153,6 +235,12 @@
       color: var(--muted);
       font-size: 0.8rem;
       min-height: 1.1em;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.2rem 0.7rem;
+    }
+    .metric-detail span {
+      white-space: nowrap;
     }
     .meter {
       margin-top: 0.45rem;
@@ -300,6 +388,9 @@
       min-height: 0;
     }
     .cinema-side {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
       overflow-y: auto;
       max-height: calc(100vh - 4.5rem);
       align-self: start;
@@ -321,7 +412,10 @@
     .cinema-side .metrics-grid {
       grid-template-columns: 1fr;
       gap: 0.35rem;
-      margin-bottom: 0.5rem;
+      margin-bottom: 0;
+    }
+    .cinema-side #enroll-panel {
+      margin-top: auto;
     }
     .cinema-side .list-row {
       padding: 0.3rem 0;
@@ -336,6 +430,21 @@
       font-size: 0.8rem;
       margin-top: 0.5rem;
       padding-top: 0.5rem;
+    }
+    .cinema-side .action-panel {
+      padding: 0.6rem;
+    }
+    .cinema-side .action-panel p {
+      font-size: 0.8rem;
+    }
+    .cinema-side .action-buttons {
+      margin-top: 0.6rem;
+      gap: 0.45rem;
+    }
+    .cinema-side .action-buttons a {
+      width: 100%;
+      min-height: 2.1rem;
+      font-size: 0.78rem;
     }
     body.cinema .toggle-btn {
       opacity: 1;
@@ -359,8 +468,8 @@
     <nav>
       <strong>Face Recognition</strong>
       <a href="/gallery">Gallery</a>
+      <a href="/enroll-wizard">Enroll</a>
       <a href="/stream.mjpg">Stream</a>
-      <a href="/metrics.json">Metrics</a>
       <a href="/settings">Settings</a>
       <a href="https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition" target="_blank" style="margin-left:auto;font-size:0.8rem;color:var(--muted)">GitHub</a>
     </nav>
@@ -383,6 +492,17 @@
     </div>
     <!-- metric containers (populated by JS, moved into cinema panels) -->
     <div style="display:none">
+      <div id="enroll-panel" class="action-panel is-hidden">
+        <strong id="enroll-kicker" class="action-kicker">New face spotted</strong>
+        <p id="enroll-hint">
+          Start guided camera enrollment when a new person appears, or review auto-captured
+          unknowns from the gallery.
+        </p>
+        <div class="action-buttons">
+          <a id="enroll-primary" class="action-primary" href="/enroll-wizard">Start Camera Enrollment</a>
+          <a id="enroll-secondary" class="action-secondary" href="/gallery">Open Gallery Inbox</a>
+        </div>
+      </div>
       <div id="error-banner" class="error-banner"></div>
       <div id="hero-metrics" class="metrics-grid"></div>
       <div id="system-metrics" class="list-grid"></div>
@@ -400,6 +520,11 @@
     const pipelineMetrics = document.getElementById('pipeline-metrics');
     const runtimeStatus = document.getElementById('runtime-status');
     const errorBanner = document.getElementById('error-banner');
+    const enrollPanel = document.getElementById('enroll-panel');
+    const enrollKicker = document.getElementById('enroll-kicker');
+    const enrollHint = document.getElementById('enroll-hint');
+    const enrollPrimary = document.getElementById('enroll-primary');
+    const enrollSecondary = document.getElementById('enroll-secondary');
 
     let failCount = 0;
     let disconnected = false;
@@ -483,37 +608,57 @@
       return '<div class="meter"><span style="width:' + width.toFixed(1) + '%"></span></div>';
     }
 
+    function setCallToAction(config) {
+      if (!config) {
+        enrollPanel.className = 'action-panel is-hidden';
+        return;
+      }
+      enrollPanel.className = 'action-panel ' + config.mode;
+      enrollKicker.textContent = config.kicker;
+      enrollHint.textContent = config.hint;
+      enrollPrimary.textContent = config.primaryLabel;
+      enrollPrimary.href = config.primaryHref;
+      enrollSecondary.textContent = config.secondaryLabel;
+      enrollSecondary.href = config.secondaryHref;
+    }
+
     // -- metrics rendering ---------------------------------------------------
 
     function renderCards(metrics) {
       const cards = [
         {
-          label: 'Output FPS',
-          value: fmt(metrics.current_output_fps, 1),
-          detail: 'avg ' + fmt(metrics.avg_output_fps, 1),
-          tooltip:
-            'Actual delivered stream cadence, including the enforced sleep and recognition work.',
+          label: 'People in view',
+          value: String(metrics.last_faces ?? 0),
+          detail:
+            '<span>Known ' + String(metrics.last_recognized_faces ?? 0) + '</span>' +
+            '<span>New ' + String(metrics.last_unrecognized_faces ?? 0) + '</span>',
+          tooltip: 'How many faces are visible right now, and how many are already known.',
         },
         {
-          label: 'Target FPS',
-          value: fmt(metrics.target_fps, 1),
-          detail: 'configured cap',
-          tooltip: 'The configured maximum loop cadence from --fps. Actual output can be lower.',
+          label: 'Needs review',
+          value: String(metrics.unknowns_inbox_count ?? 0),
+          detail:
+            ((metrics.unknowns_inbox_count ?? 0) > 0)
+              ? '<span>Unknown captures waiting</span>'
+              : '<span>Gallery inbox is clear</span>',
+          tooltip: 'Unknown captures waiting in the gallery for review or naming.',
         },
         {
-          label: 'CPU',
-          value: pct(metrics.cpu_usage_pct),
-          detail: 'load ' + fmt(metrics.loadavg_1m, 2),
-          meterValue: metrics.cpu_usage_pct,
-          tooltip: 'Whole-system CPU usage estimated from /proc/stat deltas.',
+          label: 'Output speed',
+          value: fmt(metrics.avg_output_fps, 1) + ' fps',
+          detail:
+            '<span>Now ' + fmt(metrics.current_output_fps, 1) + '</span>' +
+            '<span>Target ' + fmt(metrics.target_fps, 1) + '</span>' +
+            '<span>Processing ' + fmt(metrics.current_processing_fps, 1) + '</span>',
+          tooltip: 'Delivered stream speed, configured target, and raw processing headroom.',
         },
         {
-          label: 'Temp',
-          value: fmt(metrics.cpu_temp_c, 1, '\u00b0C'),
-          detail: 'RSS ' + fmt(metrics.peak_rss_mb, 0, ' MB'),
-          meterValue: metrics.cpu_temp_c,
-          meterMax: 100,
-          tooltip: 'Raspberry Pi SoC temperature from the thermal sensor.',
+          label: 'Memory',
+          value: fmt(metrics.current_rss_mb, 0, ' MB'),
+          detail:
+            '<span>Peak ' + fmt(metrics.peak_rss_mb, 0, ' MB') + '</span>' +
+            '<span>Temp ' + fmt(metrics.cpu_temp_c, 1, '\u00b0C') + '</span>',
+          tooltip: 'Current memory use, peak memory use, and Pi temperature.',
         },
       ];
 
@@ -549,90 +694,112 @@
     }
 
     function renderMetrics(metrics) {
+      if ((metrics.last_unrecognized_faces ?? 0) > 0) {
+        setCallToAction({
+          mode: 'is-alert',
+          kicker: (metrics.last_unrecognized_faces === 1) ? 'New face spotted' : 'New faces spotted',
+          hint:
+            String(metrics.last_unrecognized_faces) +
+            ((metrics.last_unrecognized_faces === 1) ? ' person is not recognized right now.' : ' people are not recognized right now.') +
+            ' Start enrollment if they should become known.',
+          primaryLabel: 'Start enrollment',
+          primaryHref: '/enroll-wizard',
+          secondaryLabel: 'Review unknowns',
+          secondaryHref: '/gallery',
+        });
+      } else if ((metrics.unknowns_inbox_count ?? 0) > 0) {
+        setCallToAction({
+          mode: 'is-queue',
+          kicker: 'Unknowns waiting',
+          hint:
+            'Gallery inbox has ' + String(metrics.unknowns_inbox_count) +
+            ' capture(s) waiting for review or naming.',
+          primaryLabel: 'Open review inbox',
+          primaryHref: '/gallery',
+          secondaryLabel: 'Start enrollment',
+          secondaryHref: '/enroll-wizard',
+        });
+      } else {
+        setCallToAction(null);
+      }
+
       renderCards(metrics);
 
       renderRows(systemMetrics, [
         [
-          'Accelerator',
-          metrics.accelerator_mode || 'cpu-only',
-          'Which inference provider is currently doing the recognition work.'
+          'Known people in gallery',
+          String(metrics.gallery_size ?? 0),
+          'How many named identities are currently saved.'
         ],
         [
-          'GPU usage',
-          metrics.gpu_usage_pct === null
-            ? 'n/a'
-            : pct(metrics.gpu_usage_pct),
-          'Kernel-reported GPU busy percentage when available.'
+          'People visible now',
+          String(metrics.last_faces ?? 0),
+          'Faces visible in the current frame.'
         ],
         [
-          'Current RSS',
-          fmt(metrics.current_rss_mb, 1, ' MB'),
-          'Current process resident memory.'
+          'Known right now',
+          String(metrics.last_recognized_faces ?? 0),
+          'Visible faces already matched to the gallery.'
         ],
         [
-          'Peak RSS',
-          fmt(metrics.peak_rss_mb, 1, ' MB'),
-          'Peak resident memory used by this process.'
+          'New right now',
+          String(metrics.last_unrecognized_faces ?? 0),
+          'Visible faces not matched to the gallery yet.'
         ],
-        ['Load avg 1/5/15m', [
-          fmt(metrics.loadavg_1m, 2),
-          fmt(metrics.loadavg_5m, 2),
-          fmt(metrics.loadavg_15m, 2)
-        ].join(' / '), 'OS load average over 1, 5, and 15 minutes.'],
+        [
+          'Waiting in review',
+          String(metrics.unknowns_inbox_count ?? 0),
+          'Unknown captures waiting in the gallery inbox.'
+        ],
       ]);
 
       renderRows(pipelineMetrics, [
         [
-          'Detect cadence',
-          'every ' + String(metrics.det_every ?? 1) + ' frame(s)',
-          'How often the face detector runs.'
+          'Output / target',
+          fmt(metrics.avg_output_fps, 1) + ' / ' + fmt(metrics.target_fps, 1) + ' fps',
+          'Average delivered speed versus the configured target.'
         ],
         [
-          'Processing FPS',
-          fmt(metrics.current_processing_fps, 1),
-          'Loop body speed excluding the intentional sleep.'
+          'Processing headroom',
+          fmt(metrics.current_processing_fps, 1) + ' fps',
+          'How fast the loop can run before the intentional FPS cap is applied.'
         ],
         [
-          'Last loop',
+          'Time per frame',
           fmt(metrics.last_loop_ms, 1, ' ms'),
           'Processing time for the latest frame.'
         ],
-        ['Detect / track / embed', [
+        [
+          'Detector cadence',
+          'every ' + String(metrics.det_every ?? 1) + ' frame(s)',
+          'How often the detector runs.'
+        ],
+        ['Latest stage split', [
           fmt(metrics.last_detect_ms, 1),
           fmt(metrics.last_track_ms, 1),
           fmt(metrics.last_embed_ms, 1)
         ].join(' / ') + ' ms', 'Per-stage timings for the latest frame.'],
-        ['Faces / fresh tracks', [
-          String(metrics.last_faces ?? 0),
-          String(metrics.last_fresh_tracks ?? 0)
-        ].join(' / '),
-          'Visible tracked faces and how many were refreshed on the latest frame.'
-        ],
-        ['Refreshes / reuses', [
-          String(metrics.last_refreshes ?? 0),
-          String(metrics.last_reuses ?? 0)
-        ].join(' / '), 'Embeddings recomputed vs reused from cache.'],
-        [
-          'Recognized / gallery',
-          [
-            String(metrics.last_recognized_faces ?? 0),
-            String(metrics.gallery_size ?? 0)
-          ].join(' / '),
-          'Recognized faces versus confirmed gallery identities.'
-        ],
-        ['Avg loop / det / trk / emb', [
-          fmt(metrics.avg_loop_ms, 1),
+        ['Average stage split', [
           fmt(metrics.avg_detect_ms, 1),
           fmt(metrics.avg_track_ms, 1),
           fmt(metrics.avg_embed_ms, 1)
-        ].join(' / ') + ' ms', 'Rolling averages since start.'],
+        ].join(' / ') + ' ms', 'Rolling stage timing averages since start.'],
+        [
+          'Run time',
+          fmt(metrics.uptime_seconds, 0, ' s'),
+          'How long this server has been running.'
+        ],
+        [
+          'Frames processed',
+          String(metrics.frames_processed ?? 0),
+          'Total processed frames since startup.'
+        ],
       ]);
 
-      runtimeStatus.innerHTML =
-        '<strong>Frames:</strong> ' + String(metrics.frames_processed ?? 0) +
-        ' &nbsp;|&nbsp; <strong>Uptime:</strong> ' + fmt(metrics.uptime_seconds, 1, ' s') +
-        ' &nbsp;|&nbsp; <strong>Embed refresh:</strong> ' +
-        (metrics.embed_refresh_enabled ? 'on' : 'off');
+      runtimeStatus.textContent =
+        ((metrics.last_faces ?? 0) > 0)
+          ? ('Watching ' + String(metrics.last_faces) + ' face(s) right now.')
+          : 'Watching for faces.';
 
       if (metrics.last_error) {
         errorBanner.textContent = 'Error: ' + metrics.last_error;
@@ -682,16 +849,18 @@
       const cinemaRight = document.getElementById('cinema-right');
 
       const leftH = document.createElement('h3');
-      leftH.textContent = 'Overview';
+      leftH.textContent = 'Now';
       cinemaLeft.appendChild(leftH);
       cinemaLeft.appendChild(heroMetrics);
-      const sysH = document.createElement('h3');
-      sysH.textContent = 'System';
-      cinemaLeft.appendChild(sysH);
-      cinemaLeft.appendChild(systemMetrics);
+      cinemaLeft.appendChild(enrollPanel);
+
+      const activityH = document.createElement('h3');
+      activityH.textContent = 'Activity';
+      cinemaRight.appendChild(activityH);
+      cinemaRight.appendChild(systemMetrics);
 
       const pipH = document.createElement('h3');
-      pipH.textContent = 'Pipeline';
+      pipH.textContent = 'Performance';
       cinemaRight.appendChild(pipH);
       cinemaRight.appendChild(pipelineMetrics);
       cinemaRight.appendChild(runtimeStatus);
@@ -700,4 +869,3 @@
   </script>
 </body>
 </html>
-

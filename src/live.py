@@ -62,6 +62,20 @@ class _TrackIdentityState:
     consecutive_misses: int = 0  # how many re-embeds failed to match since confirmation
 
 
+def _format_provider_name(provider_name: str | None) -> str:
+    names = {
+        "CPUExecutionProvider": "CPU only",
+        "CUDAExecutionProvider": "CUDA GPU",
+        "TensorRTExecutionProvider": "TensorRT GPU",
+        "OpenVINOExecutionProvider": "OpenVINO",
+        "ACLExecutionProvider": "Arm Compute Library",
+        "AzureExecutionProvider": "Azure remote",
+    }
+    if provider_name is None:
+        return "Unknown"
+    return names.get(provider_name, provider_name)
+
+
 class LiveRuntime:
     """Stateful live processing runtime with thread-safe pipeline hot-swap."""
 
@@ -85,9 +99,7 @@ class LiveRuntime:
         self._track_states: dict[int, _TrackIdentityState] = {}
         self._last_enrich_time: dict[str, float] = {}
 
-        metrics_path = (
-            Path(config.metrics.json_path) if config.metrics.json_path else None
-        )
+        metrics_path = Path(config.metrics.json_path) if config.metrics.json_path else None
         self._metrics = LiveMetricsCollector(
             metrics_json_path=metrics_path,
             write_every_frames=config.metrics.write_every_frames,
@@ -123,9 +135,12 @@ class LiveRuntime:
             track_ms=frame_result.overlay.track_ms,
             embed_ms=frame_result.overlay.embed_ms_total,
             face_count=len(frame_result.overlay.faces),
+            recognized_faces=frame_result.recognized_faces,
             loop_ms=loop_ms,
             memory=memory,
             gallery_size=frame_result.overlay.gallery_size,
+            unknowns_inbox_count=len(self.gallery.unknowns()),
+            accelerator_mode=self._accelerator_mode(),
         )
 
     def record_error(self, error: str) -> None:
@@ -136,16 +151,24 @@ class LiveRuntime:
     def enroll(self, name: str, uploads: list[tuple[str, bytes]]) -> EnrollmentResult:
         return self.gallery.enroll(name, uploads, self.pipeline)
 
+    def enroll_captured(
+        self, name: str, embeddings: list[Float32Array], uploads: list[tuple[str, bytes]]
+    ) -> EnrollmentResult:
+        return self.gallery.enroll_captured(name, embeddings, uploads)
+
     def list_identities(self) -> list[IdentityRecord]:
         return self.gallery.identities()
 
     def list_unknowns(self) -> list[UnknownRecord]:
         return self.gallery.unknowns()
 
-    def upload_to_identity(
-        self, slug: str, uploads: list[tuple[str, bytes]]
-    ) -> EnrollmentResult:
+    def upload_to_identity(self, slug: str, uploads: list[tuple[str, bytes]]) -> EnrollmentResult:
         return self.gallery.upload_to_identity(slug, uploads, self.pipeline)
+
+    def upload_captured_to_identity(
+        self, slug: str, embeddings: list[Float32Array], uploads: list[tuple[str, bytes]]
+    ) -> EnrollmentResult:
+        return self.gallery.upload_captured_to_identity(slug, embeddings, uploads)
 
     def rename_identity(self, slug: str, new_name: str) -> IdentityRecord:
         return self.gallery.rename_identity(slug, new_name)
@@ -159,9 +182,7 @@ class LiveRuntime:
     def delete_unknown(self, unknown_slug: str) -> None:
         self.gallery.delete_unknown(unknown_slug)
 
-    def read_gallery_image(
-        self, kind: str, slug: str, filename: str
-    ) -> tuple[bytes, str]:
+    def read_gallery_image(self, kind: str, slug: str, filename: str) -> tuple[bytes, str]:
         return self.gallery.read_image(kind, slug, filename)
 
     def list_identity_images(self, slug: str) -> list[str]:
@@ -172,6 +193,17 @@ class LiveRuntime:
 
     def delete_identity_sample(self, slug: str, filename: str) -> IdentityRecord:
         return self.gallery.delete_identity_sample(slug, filename)
+
+    def _accelerator_mode(self) -> str:
+        with self._pipeline_lock:
+            detector = self.pipeline.detector
+            embedder = self.pipeline.embedder
+
+        detector_mode = _format_provider_name(detector.provider_name)
+        embedder_mode = _format_provider_name(embedder.provider_name)
+        if detector_mode == embedder_mode:
+            return detector_mode
+        return f"det {detector_mode}, emb {embedder_mode}"
 
     # -- Frame processing ----------------------------------------------
 
@@ -186,9 +218,7 @@ class LiveRuntime:
         detect_ms = 0.0
         if self._should_run_detection():
             det, detect_ms = pipeline.detect(frame_bgr)
-            tracks = self._tracker.update(
-                det.boxes, det.kps, max_tracks=self.config.live.max_faces
-            )
+            tracks = self._tracker.update(det.boxes, det.kps, max_tracks=self.config.live.max_faces)
             self._last_tracks = list(tracks)
         else:
             tracks = self._build_held_tracks()
@@ -333,9 +363,7 @@ class LiveRuntime:
         if added:
             self._last_enrich_time[match.slug] = now
 
-    def _should_refresh_embedding(
-        self, track: Track, state: _TrackIdentityState | None
-    ) -> bool:
+    def _should_refresh_embedding(self, track: Track, state: _TrackIdentityState | None) -> bool:
         if not track.matched:
             return False
         if state is None:

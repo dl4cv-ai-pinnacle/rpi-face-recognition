@@ -48,6 +48,10 @@ class StubDetector:
     def name(self) -> str:
         return "StubDetector"
 
+    @property
+    def provider_name(self) -> str:
+        return "CPUExecutionProvider"
+
     def detect(self, frame_bgr: UInt8Array, /) -> list[Detection]:
         self.call_count += 1
         return self.detections
@@ -63,9 +67,7 @@ class StubAligner:
     def name(self) -> str:
         return "StubAligner"
 
-    def align(
-        self, frame_bgr: UInt8Array, landmarks: Float32Array, /
-    ) -> UInt8Array | None:
+    def align(self, frame_bgr: UInt8Array, landmarks: Float32Array, /) -> UInt8Array | None:
         self.call_count += 1
         return np.zeros((112, 112, 3), dtype=np.uint8)
 
@@ -82,6 +84,10 @@ class StubEmbedder:
     @property
     def name(self) -> str:
         return "StubEmbedder"
+
+    @property
+    def provider_name(self) -> str:
+        return "CPUExecutionProvider"
 
     def get_embedding(self, crop_bgr: UInt8Array, /) -> Float32Array:
         self.call_count += 1

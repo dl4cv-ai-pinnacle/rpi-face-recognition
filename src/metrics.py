@@ -110,6 +110,7 @@ class LiveMetricsSnapshot:
     updated_at_epoch: float
     uptime_seconds: float
     frames_processed: int
+    accelerator_mode: str
     target_fps: float
     det_every: int
     current_output_fps: float
@@ -124,8 +125,11 @@ class LiveMetricsSnapshot:
     last_embed_ms: float
     avg_embed_ms: float
     last_faces: int
+    last_recognized_faces: int
+    last_unrecognized_faces: int
     avg_faces_per_frame: float
     gallery_size: int
+    unknowns_inbox_count: int
     cpu_usage_pct: float
     loadavg_1m: float
     cpu_temp_c: float | None
@@ -174,6 +178,8 @@ class LiveMetricsCollector:
         self._last_track_ms = 0.0
         self._last_embed_ms = 0.0
         self._last_faces = 0
+        self._last_recognized_faces = 0
+        self._last_unrecognized_faces = 0
         self._last_frame_mono: float | None = None
         self._last_output_fps = 0.0
         self._cpu_sampler = CpuUsageSampler()
@@ -190,9 +196,12 @@ class LiveMetricsCollector:
         track_ms: float,
         embed_ms: float,
         face_count: int,
+        recognized_faces: int,
         loop_ms: float,
         memory: MemoryStats,
         gallery_size: int,
+        unknowns_inbox_count: int,
+        accelerator_mode: str,
     ) -> None:
         should_write: bool
         with self._lock:
@@ -208,6 +217,8 @@ class LiveMetricsCollector:
             self._last_track_ms = track_ms
             self._last_embed_ms = embed_ms
             self._last_faces = face_count
+            self._last_recognized_faces = recognized_faces
+            self._last_unrecognized_faces = max(0, face_count - recognized_faces)
             if self._last_frame_mono is None:
                 self._last_output_fps = 0.0
             else:
@@ -215,7 +226,10 @@ class LiveMetricsCollector:
                 self._last_output_fps = (1.0 / delta_s) if delta_s > 0.0 else 0.0
             self._last_frame_mono = now_mono
             self._snapshot = self._build_snapshot_locked(
-                gallery_size=gallery_size, memory=memory
+                gallery_size=gallery_size,
+                memory=memory,
+                unknowns_inbox_count=unknowns_inbox_count,
+                accelerator_mode=accelerator_mode,
             )
             snapshot = self._snapshot
             should_write = self.metrics_json_path is not None and (
@@ -239,6 +253,7 @@ class LiveMetricsCollector:
             updated_at_epoch=time.time(),
             uptime_seconds=0.0,
             frames_processed=0,
+            accelerator_mode="CPU only",
             target_fps=self.target_fps,
             det_every=self.det_every,
             current_output_fps=0.0,
@@ -253,8 +268,11 @@ class LiveMetricsCollector:
             last_embed_ms=0.0,
             avg_embed_ms=0.0,
             last_faces=0,
+            last_recognized_faces=0,
+            last_unrecognized_faces=0,
             avg_faces_per_frame=0.0,
             gallery_size=0,
+            unknowns_inbox_count=0,
             cpu_usage_pct=system.cpu_usage_pct,
             loadavg_1m=system.loadavg_1m,
             cpu_temp_c=system.cpu_temp_c,
@@ -265,7 +283,12 @@ class LiveMetricsCollector:
         )
 
     def _build_snapshot_locked(
-        self, *, gallery_size: int, memory: MemoryStats
+        self,
+        *,
+        gallery_size: int,
+        memory: MemoryStats,
+        unknowns_inbox_count: int,
+        accelerator_mode: str,
     ) -> LiveMetricsSnapshot:
         frames = self._frames_processed
         uptime = max(0.0, time.perf_counter() - self._start_mono)
@@ -277,6 +300,7 @@ class LiveMetricsCollector:
             updated_at_epoch=time.time(),
             uptime_seconds=uptime,
             frames_processed=frames,
+            accelerator_mode=accelerator_mode,
             target_fps=self.target_fps,
             det_every=self.det_every,
             current_output_fps=self._last_output_fps,
@@ -291,8 +315,11 @@ class LiveMetricsCollector:
             last_embed_ms=self._last_embed_ms,
             avg_embed_ms=(self._sum_embed_ms / frames) if frames else 0.0,
             last_faces=self._last_faces,
+            last_recognized_faces=self._last_recognized_faces,
+            last_unrecognized_faces=self._last_unrecognized_faces,
             avg_faces_per_frame=(self._sum_faces / frames) if frames else 0.0,
             gallery_size=gallery_size,
+            unknowns_inbox_count=unknowns_inbox_count,
             cpu_usage_pct=system.cpu_usage_pct,
             loadavg_1m=system.loadavg_1m,
             cpu_temp_c=system.cpu_temp_c,

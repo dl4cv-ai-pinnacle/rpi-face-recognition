@@ -126,9 +126,7 @@ class GalleryStore:
             self._gallery_index = None
             self._gallery_slugs = []
             return
-        matrix = np.stack(
-            [self._records[s].template for s in slugs], axis=0
-        ).astype(np.float32)
+        matrix = np.stack([self._records[s].template for s in slugs], axis=0).astype(np.float32)
         idx = faiss.IndexFlatIP(matrix.shape[1])
         idx.add(matrix)  # pyright: ignore[reportCallIssue]
         self._gallery_index = idx
@@ -141,9 +139,9 @@ class GalleryStore:
             self._unknown_index = None
             self._unknown_slugs = []
             return
-        matrix = np.stack(
-            [self._unknown_records[s].template for s in slugs], axis=0
-        ).astype(np.float32)
+        matrix = np.stack([self._unknown_records[s].template for s in slugs], axis=0).astype(
+            np.float32
+        )
         idx = faiss.IndexFlatIP(matrix.shape[1])
         idx.add(matrix)  # pyright: ignore[reportCallIssue]
         self._unknown_index = idx
@@ -198,9 +196,7 @@ class GalleryStore:
         if record is None:
             return GalleryMatch(name=None, slug=None, score=0.0, matched=False)
 
-        return GalleryMatch(
-            name=record.name, slug=record.slug, score=best_score, matched=True
-        )
+        return GalleryMatch(name=record.name, slug=record.slug, score=best_score, matched=True)
 
     def enroll(
         self,
@@ -240,9 +236,7 @@ class GalleryStore:
             accepted_files.append(label)
 
         if not embeddings:
-            raise ValueError(
-                "No usable photos. Each upload must contain exactly one clear face."
-            )
+            raise ValueError("No usable photos. Each upload must contain exactly one clear face.")
 
         result = self._upsert_identity(
             name=clean_name,
@@ -258,9 +252,33 @@ class GalleryStore:
             sample_count=len(accepted_files),
         )
 
-    def capture_unknown(
-        self, embedding: Float32Array, crop_bgr: UInt8Array
-    ) -> GalleryMatch:
+    def enroll_captured(
+        self,
+        name: str,
+        embeddings: list[Float32Array],
+        uploads: list[tuple[str, bytes]],
+    ) -> EnrollmentResult:
+        clean_name = _normalize_name(name)
+        if not clean_name:
+            raise ValueError("Name is required")
+        if not embeddings or not uploads or len(embeddings) != len(uploads):
+            raise ValueError("At least one prepared capture is required")
+
+        result = self._upsert_identity(
+            name=clean_name,
+            samples=np.asarray(np.stack(embeddings, axis=0), dtype=np.float32),
+            uploads=uploads,
+            replace_existing=False,
+        )
+        return EnrollmentResult(
+            name=result.name,
+            slug=result.slug,
+            accepted_files=tuple(filename for filename, _ in uploads),
+            rejected_files=(),
+            sample_count=len(uploads),
+        )
+
+    def capture_unknown(self, embedding: Float32Array, crop_bgr: UInt8Array) -> GalleryMatch:
         probe = normalize_embedding(embedding)
         crop = np.asarray(crop_bgr, dtype=np.uint8)
         now = time.time()
@@ -376,9 +394,7 @@ class GalleryStore:
             accepted_files.append(label)
 
         if not embeddings:
-            raise ValueError(
-                "No usable photos. Each upload must contain exactly one clear face."
-            )
+            raise ValueError("No usable photos. Each upload must contain exactly one clear face.")
 
         result = self._upsert_identity(
             name=record.name,
@@ -395,6 +411,34 @@ class GalleryStore:
             sample_count=result.sample_count,
         )
 
+    def upload_captured_to_identity(
+        self,
+        slug: str,
+        embeddings: list[Float32Array],
+        uploads: list[tuple[str, bytes]],
+    ) -> EnrollmentResult:
+        with self._lock:
+            record = self._records.get(slug)
+        if record is None:
+            raise ValueError(f"Unknown identity: {slug}")
+        if not embeddings or not uploads or len(embeddings) != len(uploads):
+            raise ValueError("At least one prepared capture is required")
+
+        result = self._upsert_identity(
+            name=record.name,
+            samples=np.asarray(np.stack(embeddings, axis=0), dtype=np.float32),
+            uploads=uploads,
+            replace_existing=False,
+            target_slug=slug,
+        )
+        return EnrollmentResult(
+            name=result.name,
+            slug=result.slug,
+            accepted_files=tuple(filename for filename, _ in uploads),
+            rejected_files=(),
+            sample_count=result.sample_count,
+        )
+
     def rename_identity(self, slug: str, new_name: str) -> IdentityRecord:
         clean_name = _normalize_name(new_name)
         if not clean_name:
@@ -408,9 +452,7 @@ class GalleryStore:
         samples = self._load_samples(self._identity_dir(slug) / "samples.npy")
         uploads = self._load_uploads(self._identity_dir(slug), prefix="upload_")
         if samples.size == 0:
-            samples = np.asarray(
-                np.expand_dims(record.template, axis=0), dtype=np.float32
-            )
+            samples = np.asarray(np.expand_dims(record.template, axis=0), dtype=np.float32)
         return self._write_identity_record(
             name=clean_name, slug=slug, samples=samples, uploads=uploads
         )
@@ -474,9 +516,7 @@ class GalleryStore:
             source_samples = np.asarray(
                 np.expand_dims(source_record.template, axis=0), dtype=np.float32
             )
-        combined_samples = np.asarray(
-            np.vstack([target_samples, source_samples]), dtype=np.float32
-        )
+        combined_samples = np.asarray(np.vstack([target_samples, source_samples]), dtype=np.float32)
 
         first_seen = min(target_record.first_seen_epoch, source_record.first_seen_epoch)
         last_seen = max(target_record.last_seen_epoch, source_record.last_seen_epoch)
@@ -492,9 +532,7 @@ class GalleryStore:
         )
 
         existing_count = len(list(target_dir.glob("capture_*")))
-        for idx, (filename, payload) in enumerate(
-            source_captures, start=existing_count + 1
-        ):
+        for idx, (filename, payload) in enumerate(source_captures, start=existing_count + 1):
             suffix = _safe_suffix(filename)
             (target_dir / f"capture_{idx:03d}{suffix}").write_bytes(payload)
 
@@ -529,9 +567,7 @@ class GalleryStore:
             raise ValueError(f"Unknown identity: {slug}")
 
         identity_dir = self._identity_dir(slug)
-        upload_files = sorted(
-            path.name for path in identity_dir.glob("upload_*") if path.is_file()
-        )
+        upload_files = sorted(path.name for path in identity_dir.glob("upload_*") if path.is_file())
         if filename not in upload_files:
             raise ValueError(f"Sample not found: {filename}")
         if len(upload_files) <= 1:
@@ -539,16 +575,12 @@ class GalleryStore:
 
         sample_idx = upload_files.index(filename)
         samples = self._load_samples(identity_dir / "samples.npy")
-        qualities = self._load_sample_qualities(
-            identity_dir, sample_count=int(samples.shape[0])
-        )
+        qualities = self._load_sample_qualities(identity_dir, sample_count=int(samples.shape[0]))
 
         (identity_dir / filename).unlink()
 
         if samples.size > 0 and sample_idx < samples.shape[0]:
-            samples = np.asarray(
-                np.delete(samples, sample_idx, axis=0), dtype=np.float32
-            )
+            samples = np.asarray(np.delete(samples, sample_idx, axis=0), dtype=np.float32)
             del qualities[sample_idx]
 
         remaining_uploads = self._load_uploads(identity_dir, prefix="upload_")
@@ -564,9 +596,7 @@ class GalleryStore:
         identity_dir = self._identity_dir(slug)
         if not identity_dir.exists():
             return []
-        return sorted(
-            path.name for path in identity_dir.glob("upload_*") if path.is_file()
-        )
+        return sorted(path.name for path in identity_dir.glob("upload_*") if path.is_file())
 
     def read_image(self, kind: str, slug: str, filename: str) -> tuple[bytes, str]:
         if not filename or Path(filename).name != filename:
@@ -605,30 +635,22 @@ class GalleryStore:
         identity_dir = self._identity_dir(slug)
         samples = self._load_samples(identity_dir / "samples.npy")
         if samples.size == 0:
-            samples = np.asarray(
-                np.expand_dims(record.template, axis=0), dtype=np.float32
-            )
+            samples = np.asarray(np.expand_dims(record.template, axis=0), dtype=np.float32)
 
         if not _check_diversity(probe, samples, max_similarity=diversity_threshold):
             return False
 
-        qualities = self._load_sample_qualities(
-            identity_dir, sample_count=int(samples.shape[0])
-        )
+        qualities = self._load_sample_qualities(identity_dir, sample_count=int(samples.shape[0]))
         uploads = self._load_uploads(identity_dir, prefix="upload_")
 
         if samples.shape[0] >= max_samples:
             worst_idx = int(np.argmin(qualities))
-            samples = np.asarray(
-                np.delete(samples, worst_idx, axis=0), dtype=np.float32
-            )
+            samples = np.asarray(np.delete(samples, worst_idx, axis=0), dtype=np.float32)
             del qualities[worst_idx]
             if worst_idx < len(uploads):
                 del uploads[worst_idx]
 
-        samples = np.asarray(
-            np.vstack([samples, probe[np.newaxis, :]]), dtype=np.float32
-        )
+        samples = np.asarray(np.vstack([samples, probe[np.newaxis, :]]), dtype=np.float32)
         qualities.append(quality)
 
         if crop_bgr is not None:
@@ -761,9 +783,7 @@ class GalleryStore:
             sample_count=int(normalized_samples.shape[0]),
             first_seen_epoch=float(first_seen_epoch),
             last_seen_epoch=float(last_seen_epoch),
-            preview_filename=self._pick_preview_filename(
-                unknown_dir, prefix="capture_"
-            ),
+            preview_filename=self._pick_preview_filename(unknown_dir, prefix="capture_"),
         )
         with self._lock:
             self._unknown_records[slug] = record
@@ -777,9 +797,7 @@ class GalleryStore:
             return None
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            template = np.asarray(
-                np.load(template_path, allow_pickle=False), dtype=np.float32
-            )
+            template = np.asarray(np.load(template_path, allow_pickle=False), dtype=np.float32)
         except (OSError, ValueError, TypeError):
             return None
 
@@ -799,15 +817,11 @@ class GalleryStore:
             return None
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            template = np.asarray(
-                np.load(template_path, allow_pickle=False), dtype=np.float32
-            )
+            template = np.asarray(np.load(template_path, allow_pickle=False), dtype=np.float32)
         except (OSError, ValueError, TypeError):
             return None
 
-        preview_filename = self._pick_preview_filename(
-            unknown_dir, prefix="capture_"
-        )
+        preview_filename = self._pick_preview_filename(unknown_dir, prefix="capture_")
         slug = str(meta.get("slug", unknown_dir.name))
         return UnknownRecord(
             slug=slug,
@@ -819,9 +833,7 @@ class GalleryStore:
             preview_filename=preview_filename,
         )
 
-    def _load_sample_qualities(
-        self, identity_dir: Path, *, sample_count: int
-    ) -> list[float]:
+    def _load_sample_qualities(self, identity_dir: Path, *, sample_count: int) -> list[float]:
         meta_path = identity_dir / "meta.json"
         if meta_path.exists():
             try:
@@ -850,14 +862,10 @@ class GalleryStore:
             next_index += 1
 
     def _pick_preview_filename(self, base_dir: Path, *, prefix: str) -> str | None:
-        files = sorted(
-            path.name for path in base_dir.glob(f"{prefix}*") if path.is_file()
-        )
+        files = sorted(path.name for path in base_dir.glob(f"{prefix}*") if path.is_file())
         return files[0] if files else None
 
-    def _load_uploads(
-        self, base_dir: Path, *, prefix: str
-    ) -> list[tuple[str, bytes]]:
+    def _load_uploads(self, base_dir: Path, *, prefix: str) -> list[tuple[str, bytes]]:
         if not base_dir.exists():
             return []
         uploads: list[tuple[str, bytes]] = []
@@ -871,9 +879,7 @@ class GalleryStore:
         if not path.exists():
             return np.asarray([], dtype=np.float32)
         try:
-            samples = np.asarray(
-                np.load(path, allow_pickle=False), dtype=np.float32
-            )
+            samples = np.asarray(np.load(path, allow_pickle=False), dtype=np.float32)
         except (OSError, ValueError):
             return np.asarray([], dtype=np.float32)
         if samples.size == 0:

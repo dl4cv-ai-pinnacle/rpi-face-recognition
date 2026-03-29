@@ -50,6 +50,11 @@ class ArcFaceEmbedder:
     def name(self) -> str:
         return "MobileFaceNet"
 
+    @property
+    def provider_name(self) -> str:
+        providers = self.session.get_providers()
+        return providers[0] if providers else "CPUExecutionProvider"
+
     def get_embedding(self, crop_bgr: UInt8Array, /) -> Float32Array:
         """Extract a 512-dim L2-normalized embedding from an aligned 112×112 crop."""
         blob = cv2.dnn.blobFromImage(

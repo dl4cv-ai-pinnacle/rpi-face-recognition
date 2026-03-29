@@ -34,6 +34,10 @@ class InsightFaceSCRFD:
     def name(self) -> str:
         return "SCRFD (insightface)"
 
+    @property
+    def provider_name(self) -> str:
+        return "CPUExecutionProvider"
+
     def detect(self, frame_bgr: UInt8Array, /) -> list[Detection]:
         faces = self._app.get(frame_bgr)
 

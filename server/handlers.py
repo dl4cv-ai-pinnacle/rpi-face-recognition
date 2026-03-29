@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 if TYPE_CHECKING:
     from src.config import AppConfig
+    from src.contracts import Float32Array, UInt8Array
     from src.gallery import EnrollmentResult, IdentityRecord, UnknownRecord
     from src.live import LiveRuntime
 
@@ -46,7 +47,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             "/gallery": self._serve_gallery,
             "/gallery/identity": lambda: self._serve_identity_detail(parsed.query),
             "/gallery/image": lambda: self._serve_gallery_image(parsed.query),
-            "/enroll-wizard": self._serve_enroll_wizard,
+            "/enroll-wizard": lambda: self._serve_enroll_wizard(parsed.query),
             "/stream.mjpg": self._serve_mjpeg,
             "/metrics.json": self._serve_metrics_json,
             "/style.css": self._serve_static_css,
@@ -137,9 +138,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
     def _serve_mjpeg(self) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Age", "0")
-        self.send_header(
-            "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"
-        )
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
         self.end_headers()
@@ -156,18 +155,14 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(b"--FRAME\r\n")
                 self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                self.wfile.write(
-                    f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii")
-                )
+                self.wfile.write(f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii"))
                 self.wfile.write(payload)
                 self.wfile.write(b"\r\n")
             except (BrokenPipeError, ConnectionResetError):
                 break
 
     def _serve_metrics_json(self) -> None:
-        body = json.dumps(
-            self.runtime.metrics_snapshot, indent=2, sort_keys=True
-        ).encode("utf-8")
+        body = json.dumps(self.runtime.metrics_snapshot, indent=2, sort_keys=True).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -325,8 +320,17 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_enroll_wizard(self) -> None:
-        body = _render_enroll_wizard_page().encode("utf-8")
+    def _serve_enroll_wizard(self, query_string: str) -> None:
+        params = parse_qs(query_string, keep_blank_values=False)
+        slug = params.get("slug", [""])[0]
+        target_record: IdentityRecord | None = None
+        if slug:
+            identities = self.runtime.list_identities()
+            target_record = next((r for r in identities if r.slug == slug), None)
+            if target_record is None:
+                self.send_error(HTTPStatus.NOT_FOUND, "Identity not found")
+                return
+        body = _render_enroll_wizard_page(target_record=target_record).encode("utf-8")
         self._send_html(body)
 
     def _serve_identity_detail(self, query_string: str) -> None:
@@ -412,9 +416,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             self._serve_message_page(HTTPStatus.BAD_REQUEST, "Upload failed", str(exc))
             return
         except Exception as exc:
-            self._serve_message_page(
-                HTTPStatus.INTERNAL_SERVER_ERROR, "Upload failed", str(exc)
-            )
+            self._serve_message_page(HTTPStatus.INTERNAL_SERVER_ERROR, "Upload failed", str(exc))
             return
         self._redirect(f"/gallery/identity?slug={quote(result.slug)}")
 
@@ -437,14 +439,15 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         from src.quality import estimate_face_pose
 
         snapshot = self.streamer.wait_for_frame(last_seen=-1, timeout=3.0)
-        if snapshot.error is not None or snapshot.jpeg_bytes is None:
+        source_jpeg = snapshot.raw_jpeg_bytes or snapshot.jpeg_bytes
+        if snapshot.error is not None or source_jpeg is None:
             self._send_json(no_face)
             return
 
         import cv2
         import numpy as np
 
-        jpeg_arr = np.frombuffer(snapshot.jpeg_bytes, dtype=np.uint8)
+        jpeg_arr = np.frombuffer(source_jpeg, dtype=np.uint8)
         decoded = cv2.imdecode(jpeg_arr, cv2.IMREAD_COLOR)
         if decoded is None:
             self._send_json(no_face)
@@ -455,10 +458,12 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         face_count = len(det_result.boxes)
 
         pose = "unknown"
+        landmarks: list[list[float]] | None = None
         if face_count == 1 and det_result.kps is not None and len(det_result.kps) > 0:
             pose = estimate_face_pose(det_result.kps[0])
+            landmarks = det_result.kps[0].astype(float).tolist()
 
-        full_b64 = base64.b64encode(snapshot.jpeg_bytes).decode("ascii")
+        full_b64 = base64.b64encode(source_jpeg).decode("ascii")
 
         face_b64: str | None = None
         if face_count > 0:
@@ -474,13 +479,16 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
                 if ok:
                     face_b64 = base64.b64encode(enc.tobytes()).decode("ascii")
 
-        self._send_json({
-            "face_detected": face_count > 0,
-            "face_count": face_count,
-            "pose": pose,
-            "jpeg_base64": full_b64,
-            "face_jpeg_base64": face_b64,
-        })
+        self._send_json(
+            {
+                "face_detected": face_count > 0,
+                "face_count": face_count,
+                "pose": pose,
+                "jpeg_base64": full_b64,
+                "face_jpeg_base64": face_b64,
+                "landmarks": landmarks,
+            }
+        )
 
     def _handle_api_enroll_captures(self) -> None:
         """POST /api/enroll-captures — enroll from base64-encoded captured frames."""
@@ -498,8 +506,16 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             return
 
         name = data.get("name", "").strip()
+        raw_slug = data.get("slug", "")
         captures = data.get("captures", [])
-        if not name:
+        if raw_slug is None:
+            slug = ""
+        elif isinstance(raw_slug, str):
+            slug = raw_slug.strip()
+        else:
+            self._send_json({"error": "Invalid identity slug"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not slug and not name:
             self._send_json({"error": "Name is required"}, status=HTTPStatus.BAD_REQUEST)
             return
         if not captures or not isinstance(captures, list):
@@ -508,40 +524,110 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             )
             return
 
-        uploads: list[tuple[str, bytes]] = []
-        for idx, b64_str in enumerate(captures):
-            if not isinstance(b64_str, str):
-                self._send_json(
-                    {"error": f"Capture {idx + 1} is not a valid base64 string"},
-                    status=HTTPStatus.BAD_REQUEST,
-                )
-                return
-            try:
-                jpeg_bytes = base64.b64decode(b64_str)
-            except Exception:
-                self._send_json(
-                    {"error": f"Capture {idx + 1} has invalid base64 encoding"},
-                    status=HTTPStatus.BAD_REQUEST,
-                )
-                return
-            uploads.append((f"capture_{idx + 1}.jpg", jpeg_bytes))
-
         try:
-            result = self.runtime.enroll(name, uploads)
-        except Exception as exc:
-            self._send_json(
-                {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR
-            )
+            embeddings, uploads = self._prepare_enrollment_captures(captures)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
 
-        self._send_json({
-            "ok": True,
-            "name": result.name,
-            "slug": result.slug,
-            "sample_count": result.sample_count,
-            "accepted_files": list(result.accepted_files),
-            "rejected_files": list(result.rejected_files),
-        })
+        try:
+            if slug:
+                result = self.runtime.upload_captured_to_identity(slug, embeddings, uploads)
+                mode = "update"
+            else:
+                result = self.runtime.enroll_captured(name, embeddings, uploads)
+                mode = "create"
+        except ValueError as exc:
+            message = str(exc)
+            status = (
+                HTTPStatus.NOT_FOUND
+                if slug and message.startswith("Unknown identity:")
+                else HTTPStatus.BAD_REQUEST
+            )
+            self._send_json({"error": message}, status=status)
+            return
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json(
+            {
+                "ok": True,
+                "mode": mode,
+                "name": result.name,
+                "slug": result.slug,
+                "sample_count": result.sample_count,
+                "accepted_count": len(result.accepted_files),
+                "accepted_files": list(result.accepted_files),
+                "rejected_files": list(result.rejected_files),
+            }
+        )
+
+    def _prepare_enrollment_captures(
+        self, captures: list[object]
+    ) -> tuple[list[Float32Array], list[tuple[str, bytes]]]:
+        import numpy as np
+
+        embeddings: list[Float32Array] = []
+        uploads: list[tuple[str, bytes]] = []
+
+        for idx, capture in enumerate(captures, start=1):
+            label = f"capture_{idx}.jpg"
+            if isinstance(capture, str):
+                jpeg_bytes = self._decode_capture_base64(capture, label)
+                frame_bgr = self._decode_capture_image(jpeg_bytes, label)
+                det_result, _ = self.runtime.pipeline.detect(frame_bgr)
+                if det_result.kps is None or len(det_result.boxes) != 1:
+                    raise ValueError(f"Capture {idx} must contain exactly one clear face")
+                emb, _ = self.runtime.pipeline.embed_from_kps(frame_bgr, det_result.kps[0])
+                embeddings.append(np.asarray(emb, dtype=np.float32))
+                uploads.append((label, jpeg_bytes))
+                continue
+
+            if not isinstance(capture, dict):
+                raise ValueError(f"Capture {idx} has an unsupported payload shape")
+
+            frame_b64 = capture.get("frame_jpeg_base64", "")
+            face_b64 = capture.get("face_jpeg_base64", "")
+            landmarks = capture.get("landmarks")
+            if not isinstance(frame_b64, str) or not frame_b64:
+                raise ValueError(f"Capture {idx} is missing frame_jpeg_base64")
+            if landmarks is None:
+                raise ValueError(f"Capture {idx} is missing landmarks")
+
+            frame_bytes = self._decode_capture_base64(frame_b64, f"Capture {idx} frame")
+            frame_bgr = self._decode_capture_image(frame_bytes, f"Capture {idx} frame")
+            try:
+                kps = np.asarray(landmarks, dtype=np.float32)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Capture {idx} has invalid landmarks") from exc
+            if kps.shape != (5, 2):
+                raise ValueError(f"Capture {idx} landmarks must have shape 5x2")
+
+            emb, _ = self.runtime.pipeline.embed_from_kps(frame_bgr, kps)
+            embeddings.append(np.asarray(emb, dtype=np.float32))
+            if isinstance(face_b64, str) and face_b64:
+                face_bytes = self._decode_capture_base64(face_b64, f"Capture {idx} face")
+            else:
+                face_bytes = frame_bytes
+            uploads.append((label, face_bytes))
+
+        return embeddings, uploads
+
+    def _decode_capture_base64(self, value: str, label: str) -> bytes:
+        try:
+            return base64.b64decode(value)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"{label} has invalid base64 encoding") from exc
+
+    def _decode_capture_image(self, payload: bytes, label: str) -> UInt8Array:
+        import cv2
+        import numpy as np
+
+        frame = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError(f"{label} is not a readable image")
+        return np.asarray(frame, dtype=np.uint8)
 
     # -- Helpers -------------------------------------------------------
 
@@ -558,15 +644,11 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             self._serve_message_page(HTTPStatus.BAD_REQUEST, error_title, str(exc))
             return
         except Exception as exc:
-            self._serve_message_page(
-                HTTPStatus.INTERNAL_SERVER_ERROR, error_title, str(exc)
-            )
+            self._serve_message_page(HTTPStatus.INTERNAL_SERVER_ERROR, error_title, str(exc))
             return
         self._redirect(redirect_to)
 
-    def _parse_multipart_request(
-        self, text_field_name: str
-    ) -> tuple[str, list[tuple[str, bytes]]]:
+    def _parse_multipart_request(self, text_field_name: str) -> tuple[str, list[tuple[str, bytes]]]:
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
             raise ValueError("Expected multipart/form-data upload")
@@ -578,10 +660,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             raise ValueError("Empty request body")
 
         payload = self.rfile.read(content_length)
-        envelope = (
-            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
-            + payload
-        )
+        envelope = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + payload
         message = BytesParser(policy=email_default_policy).parsebytes(envelope)
         if not message.is_multipart():
             raise ValueError("Expected multipart form fields")
@@ -623,9 +702,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         payload = self.rfile.read(max(0, content_length))
         decoded = payload.decode("utf-8", errors="replace")
         raw_fields = parse_qs(decoded, keep_blank_values=True)
-        return {
-            key: values[0].strip() for key, values in raw_fields.items() if values
-        }
+        return {key: values[0].strip() for key, values in raw_fields.items() if values}
 
     def _send_html(self, body: bytes) -> None:
         self.send_response(HTTPStatus.OK)
@@ -635,9 +712,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_json(
-        self, data: object, *, status: HTTPStatus = HTTPStatus.OK
-    ) -> None:
+    def _send_json(self, data: object, *, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -652,9 +727,7 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
-    def _serve_message_page(
-        self, status: HTTPStatus, title: str, message: str
-    ) -> None:
+    def _serve_message_page(self, status: HTTPStatus, title: str, message: str) -> None:
         body = _render_message_page(title, message).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -679,13 +752,15 @@ def _page_shell(title: str, content: str, *, current: str = "") -> str:
         aria = ' aria-current="page"' if href == current else ""
         return f'<a href="{href}"{aria}>{label}</a>'
 
-    nav = "\n      ".join([
-        _nav_link("/", "Live Feed"),
-        _nav_link("/gallery", "Gallery"),
-        _nav_link("/enroll-wizard", "Enroll"),
-        _nav_link("/settings", "Settings"),
-        _nav_link("/metrics.json", "Metrics"),
-    ])
+    nav = "\n      ".join(
+        [
+            _nav_link("/", "Live Feed"),
+            _nav_link("/gallery", "Gallery"),
+            _nav_link("/enroll-wizard", "Enroll"),
+            _nav_link("/settings", "Settings"),
+            _nav_link("/metrics.json", "Metrics"),
+        ]
+    )
 
     repo_link = (
         '<a href="https://github.com/dl4cv-ai-pinnacle/rpi-face-recognition"'
@@ -731,9 +806,7 @@ def _render_gallery_page(
     identities: list[IdentityRecord],
     unknowns: list[UnknownRecord],
 ) -> str:
-    identity_cards = "\n".join(
-        _render_identity_card(record) for record in identities
-    )
+    identity_cards = "\n".join(_render_identity_card(record) for record in identities)
     unknown_cards = "\n".join(
         _render_unknown_card(record, unknowns=unknowns, identities=identities)
         for record in unknowns
@@ -761,13 +834,17 @@ def _render_gallery_page(
         &mdash; guided multi-pose capture for best recognition quality.</p>
     </section>
     <div class="columns">
-      <section>
+      <section class="section-stack">
         <h2>Confirmed Identities</h2>
-        <div>{identity_cards}</div>
+        <p class="section-summary">Known people you can rename, expand, or review in detail.</p>
+        <div class="section-card">{identity_cards}</div>
       </section>
-      <section>
-        <h2>Unknown Review Inbox</h2>
-        <div>{unknown_cards}</div>
+      <section class="section-stack">
+        <h2>Unknowns</h2>
+        <p class="section-summary">
+          Recent captures that still need a name or should be discarded.
+        </p>
+        <div class="section-card">{unknown_cards}</div>
       </section>
     </div>"""
     return _page_shell("Gallery", content, current="/gallery")
@@ -777,21 +854,26 @@ def _render_identity_card(record: IdentityRecord) -> str:
     name = html.escape(record.name)
     slug = html.escape(record.slug)
     detail_url = "/gallery/identity?slug=" + quote(record.slug)
+    camera_url = "/enroll-wizard?slug=" + quote(record.slug)
     preview = _render_preview_image("identity", record.slug, record.preview_filename)
     return f"""<div class="card">
   {preview}
-  <div>
+  <div class="card-body">
     <h3 class="card-name"><a href="{detail_url}">{name}</a></h3>
     <p class="meta">{slug} &middot; {record.sample_count} samples</p>
-    <form action="/gallery/rename" method="post">
+    <div class="card-actions">
+      <a class="text-button" href="{camera_url}">Add Samples with Camera</a>
+      <a class="text-button subtle" href="{detail_url}">Open Details</a>
+    </div>
+    <form class="inline-form" action="/gallery/rename" method="post">
       <input type="hidden" name="slug" value="{slug}">
       <input type="text" name="name" value="{name}" required>
-      <div class="button-row"><button type="submit">Rename</button></div>
+      <button type="submit">Rename</button>
     </form>
     <form action="/gallery/delete-identity" method="post"
           onsubmit="return confirm('Delete {name}?')" style="margin-top:0">
       <input type="hidden" name="slug" value="{slug}">
-      <div class="button-row"><button class="delete" type="submit">Delete</button></div>
+      <div class="button-row compact"><button class="delete" type="submit">Delete</button></div>
     </form>
   </div>
 </div>"""
@@ -814,9 +896,7 @@ def _render_unknown_card(
         merge_options.append(f'<option value="unknown:{s}">{s} ({other.sample_count})</option>')
     for identity in identities:
         n = html.escape(identity.name)
-        merge_options.append(
-            f'<option value="identity:{n}">{n} ({identity.sample_count})</option>'
-        )
+        merge_options.append(f'<option value="identity:{n}">{n} ({identity.sample_count})</option>')
 
     merge_form = ""
     if merge_options:
@@ -853,18 +933,21 @@ def _render_unknown_card(
 
     return f"""<div class="card">
   {preview}
-  <div>
+  <div class="card-body">
     <h3 class="card-name">{slug}</h3>
     <p class="meta">{record.sample_count} captures</p>
-    <form action="/gallery/promote" method="post">
+    <form class="inline-form" action="/gallery/promote" method="post">
       <input type="hidden" name="unknown_slug" value="{slug}">
       <input type="text" name="name" placeholder="Name to promote as" required>
-      <div class="button-row"><button type="submit">Promote</button></div>
+      <button type="submit">Promote</button>
     </form>{merge_form}
-    <form action="/gallery/delete-unknown" method="post" style="margin-top:0">
-      <input type="hidden" name="unknown_slug" value="{slug}">
-      <div class="button-row"><button class="delete" type="submit">Discard</button></div>
-    </form>
+    <div class="card-actions">
+      {merge_form}
+      <form action="/gallery/delete-unknown" method="post" style="margin-top:0">
+        <input type="hidden" name="unknown_slug" value="{slug}">
+        <div class="button-row compact"><button class="delete" type="submit">Discard</button></div>
+      </form>
+    </div>
   </div>
 </div>"""
 
@@ -872,16 +955,12 @@ def _render_unknown_card(
 def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> str:
     name = html.escape(record.name)
     slug = html.escape(record.slug)
+    camera_url = "/enroll-wizard?slug=" + quote(record.slug)
 
     image_cards: list[str] = []
     for img in images:
         safe_img = html.escape(img)
-        img_url = (
-            "/gallery/image?kind=identity&slug="
-            + quote(record.slug)
-            + "&file="
-            + quote(img)
-        )
+        img_url = "/gallery/image?kind=identity&slug=" + quote(record.slug) + "&file=" + quote(img)
         image_cards.append(f"""<div class="sample-card">
   <img class="sample-img" src="{img_url}" alt="{safe_img}">
   <form action="/gallery/delete-sample" method="post"
@@ -897,8 +976,7 @@ def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> s
     content = f"""<h1>{name}</h1>
     <p class="meta">{slug} &middot; {record.sample_count} samples</p>
     <div class="actions">
-      <form action="/gallery/rename" method="post"
-            style="display:flex;gap:0.5rem;align-items:end">
+      <form class="inline-form" action="/gallery/rename" method="post">
         <input type="hidden" name="slug" value="{slug}">
         <input type="text" name="name" value="{name}" required>
         <button type="submit">Rename</button>
@@ -910,13 +988,14 @@ def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> s
       </form>
     </div>
     <div class="actions">
-      <form action="/gallery/upload-samples" method="post" enctype="multipart/form-data"
-            style="display:flex;gap:0.5rem;align-items:end;flex-wrap:wrap">
+      <form class="inline-form" action="/gallery/upload-samples" method="post"
+            enctype="multipart/form-data">
         <input type="hidden" name="slug" value="{slug}">
         <input type="file" name="photos" accept="image/*" multiple required
                style="font-size:0.85rem;color:var(--muted)">
         <button type="submit">Upload Photos</button>
       </form>
+      <a class="text-button" href="{camera_url}">Add Samples with Camera</a>
       <p style="color:var(--muted);font-size:0.8rem;margin:0">
         Add photos from different angles to improve recognition.</p>
     </div>
@@ -928,9 +1007,7 @@ def _render_identity_detail_page(record: IdentityRecord, images: list[str]) -> s
 def _render_preview_image(kind: str, slug: str, filename: object) -> str:
     if not isinstance(filename, str) or not filename:
         return '<div class="thumb empty">No preview</div>'
-    url = (
-        "/gallery/image?kind=" + quote(kind) + "&slug=" + quote(slug) + "&file=" + quote(filename)
-    )
+    url = "/gallery/image?kind=" + quote(kind) + "&slug=" + quote(slug) + "&file=" + quote(filename)
     alt = html.escape(f"{kind} preview")
     return f'<img class="thumb" src="{url}" alt="{alt}">'
 
@@ -1084,11 +1161,47 @@ def _render_settings_page(config: AppConfig) -> str:
     return _page_shell("Settings", content, current="/settings")
 
 
-def _render_enroll_wizard_page() -> str:
-    content = """<h1>Enroll with Camera</h1>
+def _render_enroll_wizard_page(*, target_record: IdentityRecord | None = None) -> str:
+    target_name = target_record.name if target_record is not None else ""
+    target_slug = target_record.slug if target_record is not None else ""
+    escaped_target_name = html.escape(target_name)
+    escaped_target_slug = html.escape(target_slug)
+    target_name_json = json.dumps(target_name)
+    target_slug_json = json.dumps(target_slug)
+    title = "Add Camera Samples" if target_record is not None else "Enroll with Camera"
+    intro = (
+        f"""<h1>Add Camera Samples</h1>
+    <p style="color:var(--muted);font-size:0.9rem;margin:0 0 0.35rem;line-height:1.5">
+      Capture 3 photos for <strong>{escaped_target_name}</strong> from different angles.</p>
+    <p style="color:var(--muted);font-size:0.85rem;margin:0 0 1rem;line-height:1.5">
+      New samples will be added to <code>{escaped_target_slug}</code> without
+      creating a new identity.</p>"""
+        if target_record is not None
+        else """<h1>Enroll with Camera</h1>
     <p style="color:var(--muted);font-size:0.9rem;margin:0 0 1rem;line-height:1.5">
       Capture 3 photos from different angles for robust recognition.
-      Position yourself in front of the camera and follow the instructions.</p>
+      Position yourself in front of the camera and follow the instructions.</p>"""
+    )
+    enroll_form = (
+        f"""<div id="wizard-enroll" class="wizard-enroll" style="display:none">
+            <p style="margin:0;color:var(--muted);font-size:0.85rem;line-height:1.45">
+              Ready to add these samples to <strong>{escaped_target_name}</strong>.</p>
+            <button onclick="submitEnrollment()">Add Samples</button>
+          </div>"""
+        if target_record is not None
+        else """<div id="wizard-enroll" class="wizard-enroll" style="display:none">
+            <label style="display:grid;gap:0.25rem;font-size:0.85rem;color:var(--muted)">
+              Name
+              <input type="text" id="enroll-name" required
+                     placeholder="Enter name for enrollment">
+            </label>
+            <button onclick="submitEnrollment()">Enroll</button>
+          </div>"""
+    )
+
+    content = (
+        intro
+        + """
 
     <div class="wizard">
       <div class="wizard-steps">
@@ -1099,7 +1212,10 @@ def _render_enroll_wizard_page() -> str:
 
       <div class="wizard-body">
         <div class="wizard-stream">
-          <img src="/stream.mjpg" alt="Live camera feed" class="wizard-feed">
+          <div id="wizard-stream-loading" class="wizard-stream-loading">
+            Connecting camera...
+          </div>
+          <img id="wizard-feed" src="/stream.mjpg" alt="Live camera feed" class="wizard-feed">
           <div id="wizard-instruction" class="wizard-instruction">
             Look straight at the camera</div>
         </div>
@@ -1129,14 +1245,9 @@ def _render_enroll_wizard_page() -> str:
             </div>
           </div>
 
-          <div id="wizard-enroll" class="wizard-enroll" style="display:none">
-            <label style="display:grid;gap:0.25rem;font-size:0.85rem;color:var(--muted)">
-              Name
-              <input type="text" id="enroll-name" required
-                     placeholder="Enter name for enrollment">
-            </label>
-            <button onclick="submitEnrollment()">Enroll</button>
-          </div>
+    """
+        + enroll_form
+        + """
 
           <div id="wizard-status" class="status"></div>
         </div>
@@ -1145,6 +1256,12 @@ def _render_enroll_wizard_page() -> str:
 
     <script>
     (function() {
+      const TARGET_SLUG = """
+        + target_slug_json
+        + """;
+      const TARGET_NAME = """
+        + target_name_json
+        + """;
       const STEPS = [
         "Look straight at the camera",
         "Turn your head slightly to the left",
@@ -1158,11 +1275,45 @@ def _render_enroll_wizard_page() -> str:
       let captures = [null, null, null];  // base64 JPEG strings
       let faceThumbs = [null, null, null];  // base64 face crops for preview
       let capturing = false;
+      let streamConnected = false;
 
       // Auto-capture state
       let poseMatchCount = 0;   // consecutive polls with matching pose
       let pollTimer = null;     // setInterval id
       let autoCaptureData = null;  // last poll data when pose matched
+
+      const streamImg = document.getElementById("wizard-feed");
+      const streamLoading = document.getElementById("wizard-stream-loading");
+
+      function connectWizardStream() {
+        streamConnected = false;
+        streamImg.classList.remove("loaded");
+        streamLoading.classList.remove("hidden");
+        streamLoading.textContent = "Connecting camera...";
+        streamImg.src = "/stream.mjpg?t=" + Date.now();
+      }
+
+      function checkWizardStreamAlive() {
+        if (!streamConnected && streamImg.naturalWidth > 0) {
+          streamConnected = true;
+          streamImg.classList.add("loaded");
+          streamLoading.classList.add("hidden");
+        }
+      }
+
+      streamImg.addEventListener("load", checkWizardStreamAlive);
+      document.addEventListener("visibilitychange", function() {
+        if (!document.hidden) {
+          connectWizardStream();
+        }
+      });
+      window.addEventListener("pageshow", function(event) {
+        if (event.persisted) {
+          connectWizardStream();
+        }
+      });
+      connectWizardStream();
+      window.setInterval(checkWizardStreamAlive, 500);
 
       function startPolling() {
         stopPolling();
@@ -1202,13 +1353,16 @@ def _render_enroll_wizard_page() -> str:
         if (data.face_detected && data.face_count === 1 && data.pose === expected) {
           poseMatchCount++;
           autoCaptureData = data;
-          instrEl.textContent = STEPS[currentStep] + " \u2014 hold pose\u2026 \ud83d\udfe2";
+          instrEl.textContent = STEPS[currentStep] + " - hold pose...";
           instrEl.classList.add("pose-ok");
 
           if (poseMatchCount >= HOLD_POLLS) {
             // Auto-capture!
+            const capturedData = autoCaptureData;
             stopPolling();
-            applyCapture(autoCaptureData);
+            if (capturedData) {
+              applyCapture(capturedData);
+            }
           }
         } else {
           poseMatchCount = 0;
@@ -1219,7 +1373,13 @@ def _render_enroll_wizard_page() -> str:
       }
 
       function applyCapture(data) {
-        captures[currentStep] = data.jpeg_base64;
+        if (!data) {
+          showStatus("Capture failed. Please try again.", "err");
+          capturing = false;
+          startPolling();
+          return;
+        }
+        captures[currentStep] = buildCapturePayload(data);
         faceThumbs[currentStep] = data.face_jpeg_base64;
         updateThumb(currentStep);
 
@@ -1237,10 +1397,12 @@ def _render_enroll_wizard_page() -> str:
             updateStepUI();
             startPolling();
           } else {
-            // All 3 captured — show enroll form
+            // All 3 captured — show save form
             document.getElementById("wizard-actions").style.display = "none";
             document.getElementById("wizard-enroll").style.display = "";
-            document.getElementById("enroll-name").focus();
+            if (!TARGET_SLUG) {
+              document.getElementById("enroll-name").focus();
+            }
           }
         }, 600);
       }
@@ -1273,7 +1435,7 @@ def _render_enroll_wizard_page() -> str:
             return;
           }
 
-          captures[currentStep] = data.jpeg_base64;
+          captures[currentStep] = buildCapturePayload(data);
           faceThumbs[currentStep] = data.face_jpeg_base64;
 
           // Show review
@@ -1318,17 +1480,20 @@ def _render_enroll_wizard_page() -> str:
           document.getElementById("wizard-actions").style.display = "";
           startPolling();
         } else {
-          // All 3 captured — show enroll form
+          // All 3 captured — show save form
           document.getElementById("wizard-actions").style.display = "none";
           document.getElementById("wizard-enroll").style.display = "";
-          document.getElementById("enroll-name").focus();
+          if (!TARGET_SLUG) {
+            document.getElementById("enroll-name").focus();
+          }
         }
       };
 
       window.submitEnrollment = async function() {
         stopPolling();
-        const name = document.getElementById("enroll-name").value.trim();
-        if (!name) {
+        const nameInput = document.getElementById("enroll-name");
+        const name = TARGET_SLUG ? TARGET_NAME : (nameInput ? nameInput.value.trim() : "");
+        if (!TARGET_SLUG && !name) {
           showStatus("Name is required.", "err");
           return;
         }
@@ -1343,14 +1508,27 @@ def _render_enroll_wizard_page() -> str:
           const resp = await fetch("/api/enroll-captures", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: name, captures: validCaptures }),
+            body: JSON.stringify({
+              name: name,
+              slug: TARGET_SLUG || "",
+              captures: validCaptures,
+            }),
           });
           const data = await resp.json();
           if (resp.ok && data.ok) {
-            showStatus(
-              "Enrolled " + data.name + " with " + data.sample_count + " samples.", "ok"
-            );
-            setTimeout(function() { window.location.href = "/gallery"; }, 1500);
+            if (data.mode === "update") {
+              showStatus(
+                "Added " + data.accepted_count + " sample(s) to " + data.name + ".", "ok"
+              );
+              setTimeout(function() {
+                window.location.href = "/gallery/identity?slug=" + encodeURIComponent(data.slug);
+              }, 1500);
+            } else {
+              showStatus(
+                "Enrolled " + data.name + " with " + data.sample_count + " samples.", "ok"
+              );
+              setTimeout(function() { window.location.href = "/gallery"; }, 1500);
+            }
           } else {
             showStatus("Error: " + (data.error || "Unknown error"), "err");
           }
@@ -1385,6 +1563,14 @@ def _render_enroll_wizard_page() -> str:
         slot.innerHTML = '<div class="wizard-thumb-empty">' + (idx + 1) + '</div>';
       }
 
+      function buildCapturePayload(data) {
+        return {
+          frame_jpeg_base64: data.jpeg_base64,
+          face_jpeg_base64: data.face_jpeg_base64 || data.jpeg_base64,
+          landmarks: data.landmarks || null
+        };
+      }
+
       function showStatus(msg, cls) {
         var el = document.getElementById("wizard-status");
         el.textContent = msg;
@@ -1395,4 +1581,5 @@ def _render_enroll_wizard_page() -> str:
       setTimeout(startPolling, 2000);
     })();
     </script>"""
-    return _page_shell("Enroll with Camera", content, current="/enroll-wizard")
+    )
+    return _page_shell(title, content, current="/enroll-wizard")
