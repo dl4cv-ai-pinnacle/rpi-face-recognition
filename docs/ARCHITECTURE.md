@@ -103,6 +103,41 @@ matching but degrades quickly at 15-30 degree yaw. Three poses (frontal, left,
 right) cover the typical variation seen in live camera feeds and produce a
 quality-weighted mean template that matches reliably across angles.
 
+## Identity Persistence
+
+Once a face is confirmed as a known identity (e.g., "Andrii"), the `LiveRuntime`
+holds that identity for the **entire track lifetime** — even if individual
+re-embeddings dip below the match threshold when the person turns their head.
+
+The mechanism uses `_TrackIdentityState.consecutive_misses`:
+- Each failed re-embedding increments the counter
+- A successful re-embedding resets it to 0
+- Only after 5 consecutive misses does the identity downgrade
+- Tracks that were ever identified **never** create unknown fragments
+
+This prevents the common problem of a known person flickering between their name
+and "unknown-0042" when they turn their face.
+
+## Accelerator Reporting
+
+Each detector and embedder exposes a `provider_name` property (from ONNX Runtime's
+`get_providers()`). The `LiveRuntime._accelerator_mode()` method reads both and
+surfaces a human-readable label (e.g., "CPU only", "Arm Compute Library") in
+`/metrics.json` and the dashboard Performance panel.
+
+## Pre-computed Enrollment
+
+The enrollment wizard captures frames and landmarks client-side, then sends them
+to `POST /api/enroll-captures`. The server skips detection (landmarks are already
+known) and runs only `embed_from_kps` — this is faster and avoids re-detecting
+on a JPEG-compressed frame.
+
+The gallery exposes two methods for this path:
+- `enroll_captured(name, embeddings, uploads)` — create new identity
+- `upload_captured_to_identity(slug, embeddings, uploads)` — add samples to existing
+
+Both accept pre-computed `Float32Array` embeddings and skip the pipeline entirely.
+
 ## What Is Intentionally Avoided
 
 - No plugin registry or auto-discovery — backends are explicit in factory functions
