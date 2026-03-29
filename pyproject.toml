@@ -1,0 +1,54 @@
+[project]
+name = "rpi-face-recognition"
+version = "0.2.0"
+description = "Modular face recognition pipeline for Raspberry Pi 5."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.3.0",
+    "opencv-python-headless>=4.10.0",
+    "onnxruntime>=1.19.0",
+    "pyyaml>=6.0",
+    "faiss-cpu>=1.8.0",
+]
+
+[project.optional-dependencies]
+insightface = ["insightface>=0.7.3"]
+skimage = ["scikit-image>=0.24.0"]
+quantize = ["onnxruntime>=1.19.0"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.1.0",
+    "pytest>=8.4.0",
+    "pyright>=1.1.390",
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "server", "scripts", "tests"]
+extend-exclude = ["data", "models", "slop"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+include = ["src", "server", "scripts", "tests"]
+exclude = ["data", "models", "docs", "slop"]
+reportMissingImports = "none"
+reportMissingTypeStubs = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -16,6 +16,9 @@
 ## Quality
 
 - Use `uv` for project tooling.
+- For Raspberry Pi runtime setup, install needed OS-level camera/system dependencies with `apt` as part of the setup flow instead of sending the user back for missing packages. Prefer resolving `python3-picamera2`, `python3-opencv`, `libcap-dev`, and related `libcamera` prerequisites proactively when they are required.
+- If the runtime depends on `apt`-installed camera bindings, create the project venv with `uv venv --python 3.13 --system-site-packages` before `uv sync` so `uv run` can import those system modules.
+- Manage the Raspberry Pi service with `bash scripts/service.sh ...` when possible instead of manual `systemctl` sequences, so setup and restart behavior stays consistent.
 - Keep typing complete and Pyright-clean.
 - Keep formatting and linting clean with Ruff and pre-commit.
 - Preserve reproducible benchmarks and avoid misleading metrics.

@@ -1,0 +1,55 @@
+capture:
+  resolution: [640, 480]
+  format: "RGB888"
+
+detection:
+  backend: "insightface"        # "insightface" | "ultraface"
+  confidence_threshold: 0.5
+  nms_threshold: 0.4
+
+alignment:
+  method: "cv2"                 # "cv2" | "skimage"
+  output_size: 112
+
+embedding:
+  model_path: "models/buffalo_sc/w600k_mbf.onnx"
+  embedding_dim: 512
+  quantize_int8: false
+
+matching:
+  threshold: 0.4
+
+tracking:
+  iou_threshold: 0.3
+  max_missed: 3
+  smoothing: 0.65
+
+gallery:
+  root_dir: "data/gallery"
+  enrich_margin: 0.10
+  enrich_min_quality: 0.40
+  enrich_cooldown_seconds: 30.0
+  enrich_max_samples: 48
+
+live:
+  max_faces: 3
+  target_fps: 15.0
+  det_every: 3
+  match_threshold: 0.4
+  embed_refresh_frames: 30
+  embed_refresh_iou: 0.6
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+metrics:
+  json_path: "data/metrics.json"
+  write_every_frames: 30
+
+display:
+  show_window: false
+  window_name: "Face Recognition"
+
+log_level: "INFO"
+memory_limit_mb: 3072.0

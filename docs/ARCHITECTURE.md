@@ -1,0 +1,147 @@
+# Architecture
+
+## Pipeline Flow
+
+```
+Camera Frame (640x480 BGR)
+    |
+    v
+Detection (insightface SCRFD | UltraFace)
+    |
+    v
+Tracking (IoU greedy matching + EMA smoothing)
+    |
+    v
+Alignment (cv2 | skimage | center-crop fallback)
+    |
+    v
+Embedding (MobileFaceNet ArcFace, 512-dim)
+    |
+    v
+Matching (FAISS IndexFlatIP over mean templates)
+    |
+    v
+Gallery (enroll / match / capture unknown / promote / enrich)
+```
+
+## Swappable Backends
+
+Backends are selected via `config.yaml` and can be changed at runtime through the GUI settings panel.
+
+| Stage | Default | Alternative | Config key |
+|---|---|---|---|
+| Detection | insightface SCRFD (landmarks) | UltraFace-slim-320 (no landmarks, uses center-crop for recognition) | `detection.backend` |
+| Alignment | cv2 (LMEDS) | skimage (SimilarityTransform) | `alignment.method` |
+| Embedding | MobileFaceNet FP32 | MobileFaceNet INT8 | `embedding.quantize_int8` |
+
+## Key Design Decisions
+
+1. **Protocol-based DI** — every swappable stage is a `@runtime_checkable Protocol`. No base classes, no inheritance. Concrete implementations are structurally typed.
+
+2. **Frozen YAML config** — all parameters in `config.yaml`, parsed into frozen dataclasses. No module-level settings mutation.
+
+3. **FAISS with mean templates** — each identity has one template (quality-weighted mean of samples). FAISS index rebuilt on every gallery write.
+
+4. **Thread-safe hot-swap** — `LiveRuntime.swap_pipeline()` acquires an RLock, swaps the pipeline reference, clears tracker state. HTTP handler builds new pipeline before acquiring lock.
+
+5. **BGR convention** — OpenCV-native throughout. ONNX models handle RGB via `blobFromImage(swapRB=True)`.
+
+## Module Map
+
+```
+src/
+  contracts.py      Protocols + type aliases + shared dataclasses
+  config.py         YAML -> frozen dataclass tree
+  onnx_session.py   ONNX Runtime noise suppression
+  detection/        Detector backends (insightface, ultraface)
+  embedding/        Embedder backends (arcface)
+  alignment.py      Face alignment (cv2, skimage, center-crop)
+  pipeline.py       FacePipeline + factory
+  gallery.py        GalleryStore + FAISS + unknowns workflow
+  tracking.py       SimpleFaceTracker + box_iou
+  quality.py        Face quality scoring
+  metrics.py        System telemetry + rolling metrics
+  display.py        HUD + face annotations
+  capture.py        Picamera2 wrapper
+  live.py           LiveRuntime orchestrator
+  quantization.py   INT8 ONNX quantization
+
+server/
+  app.py            HTTP server entry point
+  handlers.py       Request handlers + HTML rendering
+  streamer.py       MJPEG camera streamer
+  templates/        Static HTML pages
+```
+
+## Enrollment Flow
+
+Two enrollment paths feed into the same `runtime.enroll(name, uploads)` backend:
+
+### File Upload (Gallery Page)
+
+The gallery page has a multipart form that POSTs to `/enroll`. The handler parses
+the form, extracts `(filename, jpeg_bytes)` pairs, and delegates to the gallery.
+Best for enrolling from existing photos on disk.
+
+### Interactive Wizard (`/enroll-wizard`)
+
+A step-by-step guided capture from the live camera. The wizard walks the user
+through three poses:
+
+1. **Frontal** — look straight at the camera
+2. **Left turn** — turn head slightly to the left
+3. **Right turn** — turn head slightly to the right
+
+At each step, `POST /api/capture-frame` grabs the latest MJPEG frame, runs face
+detection, and returns the annotated frame + cropped face as base64 JPEG.  After
+all three captures, the user enters a name and `POST /api/enroll-captures` sends
+the base64 frames to `runtime.enroll()`.
+
+**Multi-pose rationale:** ArcFace embeddings are most robust when the gallery
+contains samples from diverse angles. A single frontal photo works for frontal
+matching but degrades quickly at 15-30 degree yaw. Three poses (frontal, left,
+right) cover the typical variation seen in live camera feeds and produce a
+quality-weighted mean template that matches reliably across angles.
+
+## Identity Persistence
+
+Once a face is confirmed as a known identity (e.g., "Andrii"), the `LiveRuntime`
+holds that identity for the **entire track lifetime** — even if individual
+re-embeddings dip below the match threshold when the person turns their head.
+
+The mechanism uses `_TrackIdentityState.consecutive_misses`:
+- Each failed re-embedding increments the counter
+- A successful re-embedding resets it to 0
+- Only after 5 consecutive misses does the identity downgrade
+- Tracks that were ever identified **never** create unknown fragments
+
+This prevents the common problem of a known person flickering between their name
+and "unknown-0042" when they turn their face.
+
+## Accelerator Reporting
+
+Each detector and embedder exposes a `provider_name` property (from ONNX Runtime's
+`get_providers()`). The `LiveRuntime._accelerator_mode()` method reads both and
+surfaces a human-readable label (e.g., "CPU only", "Arm Compute Library") in
+`/metrics.json` and the dashboard Performance panel.
+
+## Pre-computed Enrollment
+
+The enrollment wizard captures frames and landmarks client-side, then sends them
+to `POST /api/enroll-captures`. The server skips detection (landmarks are already
+known) and runs only `embed_from_kps` — this is faster and avoids re-detecting
+on a JPEG-compressed frame.
+
+The gallery exposes two methods for this path:
+- `enroll_captured(name, embeddings, uploads)` — create new identity
+- `upload_captured_to_identity(slug, embeddings, uploads)` — add samples to existing
+
+Both accept pre-computed `Float32Array` embeddings and skip the pipeline entirely.
+
+## What Is Intentionally Avoided
+
+- No plugin registry or auto-discovery — backends are explicit in factory functions
+- No ORM or migration framework — gallery uses filesystem + FAISS
+- No async/await — stdlib threading is sufficient for Pi's 4 cores
+- No template engine — f-string HTML rendering, no Jinja dependency
+- No config file hot-reloading — GUI settings panel rebuilds components explicitly
