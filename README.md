@@ -204,6 +204,14 @@ slop/                   Archived individual prototypes (read-only)
 
 See `docs/ARCHITECTURE.md` for full details. See `docs/ATTRIBUTIONS.md` for component origins.
 
+## References
+
+Video benchmarks use the [ChokePoint](http://arma.sourceforge.net/chokepoint/) dataset:
+
+> Y. Wong, S. Chen, S. Mau, C. Sanderson, B.C. Lovell.
+> *Patch-based Probabilistic Image Quality Assessment for Face Selection and Improved Video-based Face Recognition.*
+> IEEE Biometrics Workshop, Computer Vision and Pattern Recognition (CVPR) Workshops, pages 81-88. IEEE, June 2011.
+
 ## Team
 
 - **Valenia** — gallery, live runtime, tracking, quality, metrics, benchmarks, tests, enrollment wizard
