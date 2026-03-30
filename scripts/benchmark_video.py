@@ -142,59 +142,114 @@ def load_gt_json(gt_path: Path) -> list[GTFrame]:
 def load_chokepoint_gt(chokepoint_dir: Path) -> tuple[list[Path], list[GTFrame]]:
     """Load ChokePoint dataset: frame paths + ground truth from directory structure.
 
-    Expected layout:
+    Expected layout (after extracting one or more sequences):
         chokepoint_dir/
-            ground_truth/
-                <sequence_id>.xml or <sequence_id>.txt
+            groundtruth/
+                P1E_S1_C1.xml ...
             frames/
-                <sequence_id>/
-                    <frame_0001>.jpg
-                    ...
+                P1E_S1_C1/
+                    00000000.jpg ...
 
     Returns (frame_paths_sorted, gt_frames).
     """
     frames_dir = chokepoint_dir / "frames"
-    gt_dir = chokepoint_dir / "ground_truth"
+    gt_dir = chokepoint_dir / "groundtruth"
 
     if not frames_dir.exists():
         msg = f"ChokePoint frames directory not found: {frames_dir}"
         raise FileNotFoundError(msg)
 
-    # Collect all frames across all sequences, sorted.
-    frame_paths: list[Path] = sorted(frames_dir.rglob("*.jpg")) + sorted(
-        frames_dir.rglob("*.png")
-    )
+    # Find all sequence directories (e.g., P1E_S1_C1/).
+    seq_dirs = sorted(d for d in frames_dir.iterdir() if d.is_dir())
+    if not seq_dirs:
+        msg = f"No sequence directories found in {frames_dir}"
+        raise FileNotFoundError(msg)
+
+    # Use first sequence that has matching ground truth.
+    frame_paths: list[Path] = []
+    gt_frames: list[GTFrame] = []
+
+    for seq_dir in seq_dirs:
+        seq_name = seq_dir.name
+        gt_file = gt_dir / f"{seq_name}.xml"
+        seq_frames = sorted(seq_dir.glob("*.jpg"))
+        if not seq_frames:
+            continue
+        frame_paths = seq_frames
+        if gt_file.exists():
+            gt_frames = _parse_chokepoint_xml(gt_file)
+        print(f"Using sequence: {seq_name} ({len(seq_frames)} frames, "
+              f"{len(gt_frames)} GT frames)")
+        break
+
     if not frame_paths:
         msg = f"No image files found in {frames_dir}"
         raise FileNotFoundError(msg)
 
-    # Parse ground truth if available.
-    gt_frames: list[GTFrame] = []
-    if gt_dir.exists():
-        for gt_file in sorted(gt_dir.glob("*.txt")):
-            gt_frames.extend(_parse_chokepoint_txt(gt_file))
-
     return frame_paths, gt_frames
 
 
-def _parse_chokepoint_txt(gt_file: Path) -> list[GTFrame]:
-    """Parse a ChokePoint text-format ground truth file.
+def _eyes_to_bbox(
+    left_eye: tuple[float, float],
+    right_eye: tuple[float, float],
+) -> tuple[float, float, float, float]:
+    """Estimate a face bounding box from left/right eye coordinates.
 
-    Expected format per line: frame_id subject_id x1 y1 x2 y2
+    Uses eye distance to approximate face dimensions.
     """
-    frames_by_idx: dict[int, list[GTFace]] = {}
-    for line in gt_file.read_text(encoding="utf-8").strip().splitlines():
-        parts = line.strip().split()
-        if len(parts) < 6:
-            continue
-        frame_idx = int(parts[0])
-        subject_id = parts[1]
-        x1, y1, x2, y2 = float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
-        face = GTFace(subject_id=subject_id, bbox=(x1, y1, x2, y2))
-        frames_by_idx.setdefault(frame_idx, []).append(face)
-    return [
-        GTFrame(frame_index=idx, faces=faces) for idx, faces in sorted(frames_by_idx.items())
-    ]
+    lx, ly = left_eye
+    rx, ry = right_eye
+    eye_dist = ((rx - lx) ** 2 + (ry - ly) ** 2) ** 0.5
+    if eye_dist < 1.0:
+        eye_dist = 1.0
+    cx = (lx + rx) / 2.0
+    cy = (ly + ry) / 2.0 + eye_dist * 0.3  # face center is below eye midpoint
+    w = eye_dist * 2.5
+    h = eye_dist * 3.0
+    x1 = cx - w / 2.0
+    y1 = cy - h / 2.0
+    x2 = cx + w / 2.0
+    y2 = cy + h / 2.0
+    return (x1, y1, x2, y2)
+
+
+def _parse_chokepoint_xml(gt_file: Path) -> list[GTFrame]:
+    """Parse a ChokePoint XML ground truth file.
+
+    Format:
+        <frame number="00000233">
+          <person id="0003">
+            <leftEye x="626" y="210"/>
+            <rightEye x="643" y="214"/>
+          </person>
+        </frame>
+    """
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(gt_file)  # noqa: S314
+    root = tree.getroot()
+    frames: list[GTFrame] = []
+
+    for frame_el in root.findall("frame"):
+        frame_num_str = frame_el.get("number", "0")
+        frame_idx = int(frame_num_str)
+        faces: list[GTFace] = []
+
+        for person_el in frame_el.findall("person"):
+            person_id = person_el.get("id", "unknown")
+            left_eye_el = person_el.find("leftEye")
+            right_eye_el = person_el.find("rightEye")
+            if left_eye_el is None or right_eye_el is None:
+                continue
+            left_eye = (float(left_eye_el.get("x", "0")), float(left_eye_el.get("y", "0")))
+            right_eye = (float(right_eye_el.get("x", "0")), float(right_eye_el.get("y", "0")))
+            bbox = _eyes_to_bbox(left_eye, right_eye)
+            faces.append(GTFace(subject_id=person_id, bbox=bbox))
+
+        if faces:
+            frames.append(GTFrame(frame_index=frame_idx, faces=faces))
+
+    return frames
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +277,11 @@ def enroll_gallery_from_dir(
             if img_path.suffix.lower() in (".jpg", ".jpeg", ".png"):
                 uploads.append((img_path.name, img_path.read_bytes()))
         if uploads:
-            gallery.enroll(name, uploads, pipeline)  # type: ignore[arg-type]
-            enrolled.append(name)
+            try:
+                gallery.enroll(name, uploads, pipeline)  # type: ignore[arg-type]
+                enrolled.append(name)
+            except ValueError:
+                pass  # Skip subjects where no face is detected in enrollment images.
     return enrolled
 
 
