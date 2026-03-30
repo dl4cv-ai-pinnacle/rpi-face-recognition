@@ -28,6 +28,8 @@ type UInt8Array = npt.NDArray[np.uint8]
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from src.tracking import Track
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -103,6 +105,23 @@ class EmbedderLike(Protocol):
     def provider_name(self) -> str: ...
 
     def get_embedding(self, crop_bgr: UInt8Array, /) -> Float32Array: ...
+
+
+@runtime_checkable
+class TrackerLike(Protocol):
+    """Face tracker: associate detections across frames, predict between frames."""
+
+    def update(
+        self,
+        boxes: Float32Array,
+        kps: Float32Array | None,
+        *,
+        max_tracks: int | None = None,
+    ) -> list[Track]: ...
+
+    def predict(self) -> list[Track]: ...
+
+    def reset(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------

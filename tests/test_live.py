@@ -36,7 +36,7 @@ def _test_config(tmp_path: Path) -> AppConfig:
             model_path="fake.onnx", embedding_dim=3, quantize_int8=False
         ),
         matching=MatchingConfig(threshold=0.4),
-        tracking=TrackingConfig(iou_threshold=0.3, max_missed=3, smoothing=0.65),
+        tracking=TrackingConfig(iou_threshold=0.3, max_missed=3, smoothing=0.65, method="simple"),
         gallery=GalleryConfig(
             root_dir=str(tmp_path / "gallery"),
             enrich_margin=0.10,
@@ -187,3 +187,49 @@ class TestLiveRuntimeSwapPipeline:
 
         runtime.swap_pipeline(StubPipeline())
         assert len(runtime._last_tracks) == 0
+
+
+class TestLiveRuntimeKalmanMode:
+    def _kalman_config(self, tmp_path: Path) -> AppConfig:
+        base = _test_config(tmp_path)
+        return AppConfig(
+            capture=base.capture,
+            detection=base.detection,
+            alignment=base.alignment,
+            embedding=base.embedding,
+            matching=base.matching,
+            tracking=TrackingConfig(
+                iou_threshold=0.3, max_missed=3, smoothing=0.65, method="kalman"
+            ),
+            gallery=base.gallery,
+            live=base.live,
+            server=base.server,
+            metrics=base.metrics,
+            display=base.display,
+            log_level=base.log_level,
+            memory_limit_mb=base.memory_limit_mb,
+        )
+
+    def test_kalman_runtime_processes_frames(self, tmp_path: Path) -> None:
+        config = self._kalman_config(tmp_path)
+        pipeline = StubPipeline(detector=StubDetector(detections=[make_detection()]))
+        runtime = LiveRuntime(pipeline=pipeline, gallery=StubGallery(), config=config)
+
+        result = runtime.process_frame(make_frame())
+        assert len(result.overlay.faces) == 1
+
+    def test_kalman_held_tracks_use_prediction(self, tmp_path: Path) -> None:
+        """With det_every=2, non-detection frames should use Kalman prediction."""
+        config = self._kalman_config(tmp_path)
+        pipeline = StubPipeline(detector=StubDetector(detections=[make_detection()]))
+        runtime = LiveRuntime(pipeline=pipeline, gallery=StubGallery(), config=config)
+
+        # Frame 1: detect (det_every=2 → detect on frame 1).
+        runtime.process_frame(make_frame())
+        assert pipeline.detector.call_count == 1
+
+        # Frame 2: skip detection, use Kalman prediction.
+        result2 = runtime.process_frame(make_frame())
+        assert pipeline.detector.call_count == 1  # No new detection.
+        # Track should still exist via prediction.
+        assert len(result2.overlay.faces) == 1

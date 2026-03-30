@@ -47,6 +47,7 @@ class TrackingConfig:
     iou_threshold: float
     max_missed: int
     smoothing: float
+    method: str  # "simple" | "kalman"
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ def load_config(path: str | Path) -> AppConfig:
             iou_threshold=raw["tracking"]["iou_threshold"],
             max_missed=raw["tracking"]["max_missed"],
             smoothing=raw["tracking"]["smoothing"],
+            method=raw["tracking"].get("method", "simple"),
         ),
         gallery=GalleryConfig(
             root_dir=raw["gallery"]["root_dir"],
