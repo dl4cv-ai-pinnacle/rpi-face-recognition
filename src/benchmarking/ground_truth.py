@@ -7,6 +7,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 from src.contracts import PipelineLike
 from src.gallery import GalleryStore
 
@@ -193,6 +196,59 @@ def enroll_gallery_from_dir(
             except ValueError:
                 pass  # Skip subjects where no face is detected.
     return enrolled
+
+
+def auto_enroll_from_clips(
+    clips: list[VideoClip],
+    gallery: GalleryStore,
+    pipeline: PipelineLike,
+    already_enrolled: set[str],
+) -> list[str]:
+    """Enroll missing identities from their video clip frames.
+
+    For each GT identity not in *already_enrolled*, scans their clips for a
+    frame where exactly one face is detected and enrolls from it.  This fills
+    gaps when mugshot images are unavailable.
+
+    Returns list of newly enrolled subject names.
+    """
+    # Group clips by identity.
+    by_identity: dict[str, list[VideoClip]] = {}
+    for clip in clips:
+        by_identity.setdefault(clip.identity, []).append(clip)
+
+    newly_enrolled: list[str] = []
+    for identity, identity_clips in sorted(by_identity.items()):
+        if identity in already_enrolled:
+            continue
+
+        # Try frames from this identity's clips until enrollment succeeds.
+        enrolled = False
+        for clip in identity_clips:
+            if enrolled:
+                break
+            # Sample up to 10 evenly-spaced frames to avoid reading entire clips.
+            n_frames = len(clip.frame_paths)
+            step = max(1, n_frames // 10)
+            for idx in range(0, n_frames, step):
+                frame_path = clip.frame_paths[idx]
+                img = cv2.imread(str(frame_path))
+                if img is None:
+                    continue
+                frame_bgr = np.asarray(img, dtype=np.uint8)
+                raw = cv2.imencode(".jpg", frame_bgr)
+                if not raw[0]:
+                    continue
+                payload = bytes(raw[1])
+                try:
+                    gallery.enroll(identity, [("auto.jpg", payload)], pipeline)
+                    newly_enrolled.append(identity)
+                    enrolled = True
+                    break
+                except ValueError:
+                    continue  # No single face detected in this frame.
+
+    return newly_enrolled
 
 
 # ---------------------------------------------------------------------------

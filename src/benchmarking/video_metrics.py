@@ -40,11 +40,19 @@ class TemporalMetrics:
 @dataclass(frozen=True)
 class ThroughputMetrics:
     total_frames: int
+    detection_frames: int
+    tracking_only_frames: int
     total_wall_seconds: float
     sustained_fps: float
+    # Percentiles over ALL frames (includes near-zero tracking-only frames).
     latency_p50_ms: float
     latency_p95_ms: float
     latency_p99_ms: float
+    # Percentiles over detection frames only (the expensive ones).
+    detect_latency_p50_ms: float
+    detect_latency_p95_ms: float
+    detect_latency_p99_ms: float
+    # Averages over detection frames only (not diluted by tracking-only zeros).
     avg_detect_ms: float
     avg_track_ms: float
     avg_embed_ms: float
@@ -187,33 +195,60 @@ def compute_temporal_metrics(
 
 def compute_throughput(
     loop_ms: list[float],
+    detect_loop_ms: list[float],
     detect_ms: list[float],
     track_ms: list[float],
     embed_ms: list[float],
     wall_seconds: float,
 ) -> ThroughputMetrics:
+    """Compute throughput metrics.
+
+    *loop_ms* contains times for ALL frames.  *detect_loop_ms* contains
+    loop times only for frames where detection ran.  *detect_ms*,
+    *track_ms*, *embed_ms* contain per-component times only for
+    detection frames (non-detection frames are excluded by the caller).
+    """
     n = len(loop_ms)
+    n_det = len(detect_loop_ms)
+    n_track_only = n - n_det
     if n == 0:
         return ThroughputMetrics(
             total_frames=0,
+            detection_frames=0,
+            tracking_only_frames=0,
             total_wall_seconds=wall_seconds,
             sustained_fps=0.0,
             latency_p50_ms=0.0,
             latency_p95_ms=0.0,
             latency_p99_ms=0.0,
+            detect_latency_p50_ms=0.0,
+            detect_latency_p95_ms=0.0,
+            detect_latency_p99_ms=0.0,
             avg_detect_ms=0.0,
             avg_track_ms=0.0,
             avg_embed_ms=0.0,
         )
-    sorted_latency = sorted(loop_ms)
+    sorted_all = sorted(loop_ms)
+    sorted_det = sorted(detect_loop_ms) if detect_loop_ms else []
     fps = n / wall_seconds if wall_seconds > 0 else 0.0
     return ThroughputMetrics(
         total_frames=n,
+        detection_frames=n_det,
+        tracking_only_frames=n_track_only,
         total_wall_seconds=round(wall_seconds, 3),
         sustained_fps=round(fps, 2),
-        latency_p50_ms=round(sorted_latency[int(n * 0.50)], 2),
-        latency_p95_ms=round(sorted_latency[min(int(n * 0.95), n - 1)], 2),
-        latency_p99_ms=round(sorted_latency[min(int(n * 0.99), n - 1)], 2),
+        latency_p50_ms=round(sorted_all[int(n * 0.50)], 2),
+        latency_p95_ms=round(sorted_all[min(int(n * 0.95), n - 1)], 2),
+        latency_p99_ms=round(sorted_all[min(int(n * 0.99), n - 1)], 2),
+        detect_latency_p50_ms=(
+            round(sorted_det[int(n_det * 0.50)], 2) if sorted_det else 0.0
+        ),
+        detect_latency_p95_ms=(
+            round(sorted_det[min(int(n_det * 0.95), n_det - 1)], 2) if sorted_det else 0.0
+        ),
+        detect_latency_p99_ms=(
+            round(sorted_det[min(int(n_det * 0.99), n_det - 1)], 2) if sorted_det else 0.0
+        ),
         avg_detect_ms=round(statistics.fmean(detect_ms), 2) if detect_ms else 0.0,
         avg_track_ms=round(statistics.fmean(track_ms), 2) if track_ms else 0.0,
         avg_embed_ms=round(statistics.fmean(embed_ms), 2) if embed_ms else 0.0,

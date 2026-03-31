@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import statistics
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -49,6 +51,7 @@ from src.benchmarking.config import load_config_with_overrides  # noqa: E402
 from src.benchmarking.ground_truth import (  # noqa: E402
     GTFrame,
     VideoClip,
+    auto_enroll_from_clips,
     enroll_gallery_from_dir,
     load_fanvid_gt,
     load_gt_json,
@@ -504,8 +507,10 @@ def _run_video_benchmark(
 ) -> _VideoBenchResult:
     startup_memory = enforce_memory_cap(ram_cap_mb, "startup")
     pipeline = build_pipeline(config)
+    # Use a fresh temp gallery so results are not contaminated by previous runs.
+    gallery_tmp = tempfile.mkdtemp(prefix="bench_gallery_")
     gallery = GalleryStore(
-        root_dir=Path(config.gallery.root_dir),
+        root_dir=Path(gallery_tmp),
         embedding_dim=config.embedding.embedding_dim,
     )
     post_init_memory = enforce_memory_cap(ram_cap_mb, "pipeline initialization")
@@ -513,11 +518,20 @@ def _run_video_benchmark(
     enrolled: list[str] = []
     if enroll_dir is not None and enroll_dir.exists():
         enrolled = enroll_gallery_from_dir(enroll_dir, gallery, pipeline)
-        print(f"Enrolled {len(enrolled)} identities: {enrolled}")
+        print(f"Enrolled {len(enrolled)} identities from mugshots")
+
+    # Auto-enroll from clip frames for identities missing mugshots.
+    if clips:
+        enrolled_set = set(enrolled)
+        auto = auto_enroll_from_clips(clips, gallery, pipeline, enrolled_set)
+        if auto:
+            enrolled.extend(auto)
+            print(f"Auto-enrolled {len(auto)} identities from clip frames: {auto}")
 
     # Collect timing + tracking data across all clips/frames.
     loop_ms: list[float] = []
-    detect_ms: list[float] = []
+    detect_loop_ms: list[float] = []  # loop times for detection frames only
+    detect_ms: list[float] = []  # component times for detection frames only
     track_ms: list[float] = []
     embed_ms: list[float] = []
     all_frame_records: list[list[TrackRecord]] = []
@@ -559,10 +573,14 @@ def _run_video_benchmark(
                 total_processed += 1
 
                 if total_processed > warmup_frames:
-                    loop_ms.append((t1 - t0) * 1000.0)
-                    detect_ms.append(result.overlay.detect_ms)
-                    track_ms.append(result.overlay.track_ms)
-                    embed_ms.append(result.overlay.embed_ms_total)
+                    frame_ms = (t1 - t0) * 1000.0
+                    loop_ms.append(frame_ms)
+                    is_detect_frame = result.overlay.detect_ms > 0
+                    if is_detect_frame:
+                        detect_loop_ms.append(frame_ms)
+                        detect_ms.append(result.overlay.detect_ms)
+                        track_ms.append(result.overlay.track_ms)
+                        embed_ms.append(result.overlay.embed_ms_total)
 
                     gt_frame = gt_by_frame.get(seq_idx)
                     gt_faces = gt_frame.faces if gt_frame is not None else []
@@ -579,8 +597,10 @@ def _run_video_benchmark(
                         assigned_name = None
                         if overlay_face.match is not None and overlay_face.match.matched:
                             assigned_name = overlay_face.match.name
+                        # Only count unknowns for GT-matched faces (not distractors).
                         if (
-                            overlay_face.match is not None
+                            gt_subject is not None
+                            and overlay_face.match is not None
                             and overlay_face.match.slug is not None
                             and overlay_face.match.slug.startswith("unknown-")
                         ):
@@ -621,10 +641,14 @@ def _run_video_benchmark(
             total_processed += 1
 
             if total_processed > warmup_frames:
-                loop_ms.append((t1 - t0) * 1000.0)
-                detect_ms.append(result.overlay.detect_ms)
-                track_ms.append(result.overlay.track_ms)
-                embed_ms.append(result.overlay.embed_ms_total)
+                frame_ms = (t1 - t0) * 1000.0
+                loop_ms.append(frame_ms)
+                is_detect_frame = result.overlay.detect_ms > 0
+                if is_detect_frame:
+                    detect_loop_ms.append(frame_ms)
+                    detect_ms.append(result.overlay.detect_ms)
+                    track_ms.append(result.overlay.track_ms)
+                    embed_ms.append(result.overlay.embed_ms_total)
 
                 if has_gt:
                     gt_frame = gt_by_frame.get(frame_idx)
@@ -643,7 +667,8 @@ def _run_video_benchmark(
                         if overlay_face.match is not None and overlay_face.match.matched:
                             assigned_name = overlay_face.match.name
                         if (
-                            overlay_face.match is not None
+                            gt_subject is not None
+                            and overlay_face.match is not None
                             and overlay_face.match.slug is not None
                             and overlay_face.match.slug.startswith("unknown-")
                         ):
@@ -665,7 +690,9 @@ def _run_video_benchmark(
 
     wall_seconds = time.perf_counter() - wall_t0
     final_memory = get_memory_stats()
-    throughput = compute_throughput(loop_ms, detect_ms, track_ms, embed_ms, wall_seconds)
+    throughput = compute_throughput(
+        loop_ms, detect_loop_ms, detect_ms, track_ms, embed_ms, wall_seconds,
+    )
 
     video_metrics_dict: dict[str, object] | None = None
     if has_gt and all_frame_records:
@@ -681,7 +708,7 @@ def _run_video_benchmark(
             "unknown_fragmentation_rate": temporal.unknown_fragmentation_rate,
         }
 
-    return _VideoBenchResult(
+    result = _VideoBenchResult(
         config={
             "tracking_method": config.tracking.method,
             "det_every": config.live.det_every,
@@ -701,6 +728,9 @@ def _run_video_benchmark(
             "peak_rss": round(final_memory.peak_rss_mb, 2),
         },
     )
+    # Clean up temp gallery.
+    shutil.rmtree(gallery_tmp, ignore_errors=True)
+    return result
 
 
 def _print_video_result(result: _VideoBenchResult) -> None:
@@ -708,18 +738,29 @@ def _print_video_result(result: _VideoBenchResult) -> None:
     print(f"config: {json.dumps(result.config, indent=2)}")
 
     tp = result.throughput
+    det_frames = tp.get("detection_frames", 0)
+    trk_frames = tp.get("tracking_only_frames", 0)
     print("\n--- Throughput ---")
-    print(f"frames: {tp.get('total_frames', 0)}")
+    print(
+        f"frames: {tp.get('total_frames', 0)} "
+        f"({det_frames} detection, {trk_frames} tracking-only)"
+    )
     print(f"wall time: {tp.get('total_wall_seconds', 0):.2f} s")
     print(f"sustained FPS: {tp.get('sustained_fps', 0):.2f}")
     print(
-        f"latency p50/p95/p99: {tp.get('latency_p50_ms', 0):.1f} / "
+        f"all-frames latency p50/p95/p99: {tp.get('latency_p50_ms', 0):.1f} / "
         f"{tp.get('latency_p95_ms', 0):.1f} / {tp.get('latency_p99_ms', 0):.1f} ms"
     )
     print(
-        f"avg detect: {tp.get('avg_detect_ms', 0):.1f} ms, "
-        f"track: {tp.get('avg_track_ms', 0):.1f} ms, "
-        f"embed: {tp.get('avg_embed_ms', 0):.1f} ms"
+        f"detection-frames latency p50/p95/p99: "
+        f"{tp.get('detect_latency_p50_ms', 0):.1f} / "
+        f"{tp.get('detect_latency_p95_ms', 0):.1f} / "
+        f"{tp.get('detect_latency_p99_ms', 0):.1f} ms"
+    )
+    print(
+        f"avg per detection frame: detect {tp.get('avg_detect_ms', 0):.1f} ms, "
+        f"track {tp.get('avg_track_ms', 0):.1f} ms, "
+        f"embed {tp.get('avg_embed_ms', 0):.1f} ms"
     )
 
     mem = result.memory_mb
