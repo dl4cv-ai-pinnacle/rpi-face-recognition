@@ -3,9 +3,10 @@ capture:
   format: "RGB888"
 
 detection:
-  backend: "insightface"        # "insightface" | "ultraface"
+  backend: "insightface"        # "insightface" | "ultraface" | "scrfd"
   confidence_threshold: 0.5
   nms_threshold: 0.4
+  # model_path: "models/buffalo_sc/det_500m.onnx"  # for "scrfd" backend
 
 alignment:
   method: "cv2"                 # "cv2" | "skimage"
@@ -15,9 +16,6 @@ embedding:
   model_path: "models/buffalo_sc/w600k_mbf.onnx"
   embedding_dim: 512
   quantize_int8: false
-
-matching:
-  threshold: 0.4
 
 tracking:
   method: "simple"                # "simple" | "kalman"

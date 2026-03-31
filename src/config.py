@@ -19,9 +19,10 @@ class CaptureConfig:
 
 @dataclass(frozen=True)
 class DetectionConfig:
-    backend: str  # "insightface" | "ultraface"
+    backend: str  # "insightface" | "ultraface" | "scrfd"
     confidence_threshold: float
     nms_threshold: float
+    model_path: str | None = None  # ONNX path for standalone backends (scrfd)
 
 
 @dataclass(frozen=True)
@@ -35,11 +36,6 @@ class EmbeddingConfig:
     model_path: str
     embedding_dim: int
     quantize_int8: bool
-
-
-@dataclass(frozen=True)
-class MatchingConfig:
-    threshold: float
 
 
 @dataclass(frozen=True)
@@ -93,7 +89,6 @@ class AppConfig:
     detection: DetectionConfig
     alignment: AlignmentConfig
     embedding: EmbeddingConfig
-    matching: MatchingConfig
     tracking: TrackingConfig
     gallery: GalleryConfig
     live: LiveConfig
@@ -118,6 +113,7 @@ def load_config(path: str | Path) -> AppConfig:
             backend=raw["detection"]["backend"],
             confidence_threshold=raw["detection"]["confidence_threshold"],
             nms_threshold=raw["detection"]["nms_threshold"],
+            model_path=raw["detection"].get("model_path"),
         ),
         alignment=AlignmentConfig(
             method=raw["alignment"]["method"],
@@ -127,9 +123,6 @@ def load_config(path: str | Path) -> AppConfig:
             model_path=raw["embedding"]["model_path"],
             embedding_dim=raw["embedding"]["embedding_dim"],
             quantize_int8=raw["embedding"].get("quantize_int8", False),
-        ),
-        matching=MatchingConfig(
-            threshold=raw["matching"]["threshold"],
         ),
         tracking=TrackingConfig(
             iou_threshold=raw["tracking"]["iou_threshold"],

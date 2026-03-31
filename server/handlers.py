@@ -181,7 +181,6 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
             "detection": {"backend": config.detection.backend},
             "alignment": {"method": config.alignment.method},
             "embedding": {"quantize_int8": config.embedding.quantize_int8},
-            "matching": {"threshold": config.matching.threshold},
             "tracking": {
                 "max_missed": config.tracking.max_missed,
                 "smoothing": config.tracking.smoothing,
@@ -276,19 +275,12 @@ class LiveCameraHandler(BaseHTTPRequestHandler):
                     live_config, match_threshold=float(live_updates["match_threshold"])
                 )
 
-        matching_config = config.matching
-        if "matching" in updates and "threshold" in updates["matching"]:
-            matching_config = replace(
-                matching_config, threshold=float(updates["matching"]["threshold"])
-            )
-
         new_config = replace(
             config,
             detection=det_config,
             alignment=align_config,
             embedding=embed_config,
             live=live_config,
-            matching=matching_config,
         )
         self.runtime.config = new_config  # type: ignore[misc]
 
@@ -1068,9 +1060,9 @@ def _render_settings_page(config: AppConfig) -> str:
 
       <h2>Matching</h2>
       <div class="field">
-        <label for="threshold">Threshold</label>
-        <input type="number" id="threshold" name="matching.threshold"
-               value="{config.matching.threshold}" min="0.1" max="0.9" step="0.05">
+        <label for="match-threshold">Threshold</label>
+        <input type="number" id="match-threshold" name="live.match_threshold"
+               value="{config.live.match_threshold}" min="0.1" max="0.9" step="0.05">
       </div>
 
       <h2>Tracking</h2>
@@ -1127,12 +1119,9 @@ def _render_settings_page(config: AppConfig) -> str:
         embedding: {{
           quantize_int8: document.getElementById("int8").checked,
         }},
-        matching: {{
-          threshold: parseFloat(document.getElementById("threshold").value),
-        }},
         live: {{
           det_every: parseInt(document.getElementById("det-every").value),
-          match_threshold: parseFloat(document.getElementById("threshold").value),
+          match_threshold: parseFloat(document.getElementById("match-threshold").value),
         }},
       }};
 

@@ -15,7 +15,6 @@ from src.config import (
     EmbeddingConfig,
     GalleryConfig,
     LiveConfig,
-    MatchingConfig,
     MetricsConfig,
     ServerConfig,
     TrackingConfig,
@@ -35,7 +34,6 @@ def _test_config(tmp_path: Path) -> AppConfig:
         embedding=EmbeddingConfig(
             model_path="fake.onnx", embedding_dim=3, quantize_int8=False
         ),
-        matching=MatchingConfig(threshold=0.4),
         tracking=TrackingConfig(iou_threshold=0.3, max_missed=3, smoothing=0.65, method="simple"),
         gallery=GalleryConfig(
             root_dir=str(tmp_path / "gallery"),
@@ -197,7 +195,6 @@ class TestLiveRuntimeKalmanMode:
             detection=base.detection,
             alignment=base.alignment,
             embedding=base.embedding,
-            matching=base.matching,
             tracking=TrackingConfig(
                 iou_threshold=0.3, max_missed=3, smoothing=0.65, method="kalman"
             ),
