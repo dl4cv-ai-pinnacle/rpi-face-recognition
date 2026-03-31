@@ -133,7 +133,10 @@ def load_fanvid_gt(
         if not clip_dir.exists():
             continue  # Clip not downloaded yet.
 
-        frame_paths = sorted(clip_dir.glob("*.png"))
+        frame_paths = sorted(clip_dir.glob("*.jpg"))
+        if not frame_paths:
+            # Fall back to legacy PNG extraction.
+            frame_paths = sorted(clip_dir.glob("*.png"))
         if not frame_paths:
             continue
 

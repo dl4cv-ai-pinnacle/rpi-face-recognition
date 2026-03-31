@@ -5,6 +5,12 @@ Downloads per-frame bounding-box + identity annotations from HuggingFace,
 then fetches YouTube clips via yt-dlp and extracts LR frames (180x320).
 Mugshot gallery images are downloaded for enrollment.
 
+Each video is processed as a single unit to keep disk usage bounded:
+  download (if needed) → extract frames to RAM → delete video → write frames
+
+At most ``--workers`` videos are held on disk simultaneously.  Already-cached
+videos are processed first so disk space is reclaimed before new downloads.
+
 Prerequisites:
     sudo apt install yt-dlp ffmpeg  # or: pip install yt-dlp
     # cv2 is already a project dependency
@@ -21,6 +27,9 @@ Usage:
 
     # Resume after partial download (already-extracted clips are skipped)
     uv run --python 3.13 python scripts/download_fanvid.py
+
+    # Use 4 download workers
+    uv run --python 3.13 python scripts/download_fanvid.py --workers 4
 """
 
 from __future__ import annotations
@@ -33,6 +42,8 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -52,9 +63,22 @@ _MUGSHOTS_URL = f"{_HF_BASE}/data/Celebrity_mugshot.csv"
 
 _LR_WIDTH = 320
 _LR_HEIGHT = 180
+_JPEG_QUALITY = 95
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = PROJECT_ROOT / "data" / "fanvid"
+
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ClipTask:
+    clip_dir: Path
+    start_frame: int
+    end_frame: int
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +141,17 @@ def _check_yt_dlp() -> str:
         file=sys.stderr,
     )
     sys.exit(1)
+
+
+def _clip_is_extracted(clip_dir: Path, expected_frames: int) -> bool:
+    """Check if a clip directory already has enough extracted frames."""
+    if not clip_dir.exists():
+        return False
+    n_frames = len(list(clip_dir.glob("*.jpg")))
+    if n_frames == 0:
+        # Support legacy PNG extraction.
+        n_frames = len(list(clip_dir.glob("*.png")))
+    return n_frames >= expected_frames * 0.9
 
 
 # ---------------------------------------------------------------------------
@@ -202,125 +237,217 @@ def select_clips(
 
 
 # ---------------------------------------------------------------------------
-# Download YouTube videos and extract frames
+# Group clips by video and filter already-extracted
 # ---------------------------------------------------------------------------
 
 
-def _download_and_extract_clip(
-    row: dict[str, str],
-    out_dir: Path,
-    yt_dlp: str,
-) -> bool:
-    """Download one YouTube video (if needed) and extract LR frames for the clip.
-
-    Returns True on success, False on failure.
-    """
-    name = row["Name"].strip()
-    clip_id = row["Clip ID"].strip()
-    video_id = _fix_video_id(row)
-    split = row["Split"].strip().lower()
-    start_frame = int(row["Start frame"].strip())
-    end_frame = int(row["End frame"].strip())
-    clip_dir = out_dir / "frames" / split / name / clip_id
-    # Check if already extracted.
-    expected_frames = end_frame - start_frame + 1
-    if clip_dir.exists() and len(list(clip_dir.glob("*.png"))) >= expected_frames * 0.9:
-        return True  # Already done (allow 10% tolerance for edge cases).
-
-    # Download full YouTube video to a temp directory (re-used across clips
-    # from the same video via the cache dir).
-    cache_dir = out_dir / ".video_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    video_path = cache_dir / f"{video_id}.mp4"
-
-    if not video_path.exists():
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        cmd = [
-            yt_dlp,
-            "--no-warnings",
-            "-f",
-            # Prefer H.264 (avc1) — the Pi has no AV1 hardware decoder, so
-            # av01 streams can't be read by OpenCV/ffmpeg on this platform.
-            "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/"
-            "bestvideo[ext=mp4][vcodec!=av01]+bestaudio[ext=m4a]/"
-            "best[ext=mp4]/best",
-            "--merge-output-format", "mp4",
-            "-o", str(video_path),
-            "--no-playlist",
-            url,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0 or not video_path.exists():
-            print(f"    [FAIL] yt-dlp failed for {video_id}: {result.stderr[:200]}")
-            return False
-
-    # Extract and resize frames.
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        print(f"    [FAIL] Cannot open {video_path}")
-        return False
-
-    clip_dir.mkdir(parents=True, exist_ok=True)
-    # Seek to start frame.
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame - 1)
-
-    extracted = 0
-    for frame_no in range(start_frame, end_frame + 1):
-        ret, frame = cap.read()
-        if not ret:
-            break
-        lr_frame = cv2.resize(frame, (_LR_WIDTH, _LR_HEIGHT), interpolation=cv2.INTER_CUBIC)
-        out_path = clip_dir / f"{frame_no:05d}.png"
-        cv2.imwrite(str(out_path), lr_frame)
-        extracted += 1
-
-    cap.release()
-    return extracted > 0
-
-
-def download_clips(
+def _group_clips_by_video(
     selected: list[dict[str, str]],
     out_dir: Path,
-    yt_dlp: str,
-) -> tuple[int, int]:
-    """Download and extract frames for all selected clips.
+) -> dict[str, list[_ClipTask]]:
+    """Group selected clips by video ID, skipping already-extracted clips."""
+    by_video: dict[str, list[_ClipTask]] = {}
+    skipped = 0
 
-    Returns (success_count, fail_count).
-    """
-    print(f"\n=== Downloading {len(selected)} clips ===")
-    # Group by video ID to avoid redundant downloads.
-    by_video: dict[str, list[dict[str, str]]] = {}
     for row in selected:
         vid = _fix_video_id(row)
-        by_video.setdefault(vid, []).append(row)
+        name = row["Name"].strip()
+        clip_id = row["Clip ID"].strip()
+        split = row["Split"].strip().lower()
+        start_f = int(row["Start frame"].strip())
+        end_f = int(row["End frame"].strip())
+        clip_dir = out_dir / "frames" / split / name / clip_id
 
-    ok = 0
-    fail = 0
-    for v_idx, (video_id, clips) in enumerate(sorted(by_video.items()), 1):
-        n_videos = len(by_video)
-        print(f"\n[{v_idx}/{n_videos}] Video {video_id} ({len(clips)} clip(s))")
-        for clip in clips:
-            name = clip["Name"].strip()
-            cid = clip["Clip ID"].strip()
-            label = f"  {name}/clip_{cid}"
-            # Check if already done.
-            split = clip["Split"].strip().lower()
-            clip_dir = out_dir / "frames" / split / name / cid
-            end_f = int(clip["End frame"].strip())
-            start_f = int(clip["Start frame"].strip())
-            expected = end_f - start_f + 1
-            if clip_dir.exists() and len(list(clip_dir.glob("*.png"))) >= expected * 0.9:
-                print(f"{label} [skip, already extracted]")
-                ok += 1
-                continue
+        if _clip_is_extracted(clip_dir, end_f - start_f + 1):
+            skipped += 1
+            continue
 
-            print(f"{label} extracting frames {start_f}-{end_f} ...")
-            if _download_and_extract_clip(clip, out_dir, yt_dlp):
-                ok += 1
-            else:
-                fail += 1
+        by_video.setdefault(vid, []).append(
+            _ClipTask(clip_dir=clip_dir, start_frame=start_f, end_frame=end_f)
+        )
 
-    return ok, fail
+    if skipped:
+        print(f"  ({skipped} clips already extracted, skipped)")
+    return by_video
+
+
+# ---------------------------------------------------------------------------
+# Per-video pipeline: download → extract to RAM → delete video → write frames
+# ---------------------------------------------------------------------------
+
+
+def _download_one_video(video_id: str, cache_dir: Path, yt_dlp: str) -> bool:
+    """Download a single YouTube video. Returns True on success."""
+    video_path = cache_dir / f"{video_id}.mp4"
+    if video_path.exists():
+        return True
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    cmd = [
+        yt_dlp,
+        "--no-warnings",
+        "-f",
+        # Prefer H.264 (avc1) — the Pi has no AV1 hardware decoder, so
+        # av01 streams can't be read by OpenCV/ffmpeg on this platform.
+        "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/"
+        "bestvideo[ext=mp4][vcodec!=av01]+bestaudio[ext=m4a]/"
+        "best[ext=mp4]/best",
+        "--merge-output-format",
+        "mp4",
+        "-o",
+        str(video_path),
+        "--no-playlist",
+        url,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not video_path.exists():
+        print(f"    [FAIL] yt-dlp failed for {video_id}: {result.stderr[:200]}")
+        return False
+    return True
+
+
+def _process_one_video(
+    video_id: str,
+    clips: list[_ClipTask],
+    cache_dir: Path,
+    yt_dlp: str,
+    keep_video: bool,
+) -> tuple[str, int, int]:
+    """Process one video end-to-end.
+
+    1. Download if not cached
+    2. Decode + resize clip frames into in-memory JPEG buffers
+    3. Delete the video file to reclaim disk space
+    4. Write the (much smaller) JPEG frames to disk
+
+    Returns ``(video_id, clips_ok, clips_failed)``.
+    """
+    video_path = cache_dir / f"{video_id}.mp4"
+
+    # Step 1: download if needed.
+    if not video_path.exists() and not _download_one_video(video_id, cache_dir, yt_dlp):
+        return video_id, 0, len(clips)
+
+    # Step 2: extract all clip frames into memory.
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        print(f"    [FAIL] cannot open {video_id}.mp4")
+        return video_id, 0, len(clips)
+
+    # Sort clips by start frame to minimize video seeking.
+    sorted_clips = sorted(clips, key=lambda c: c.start_frame)
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY]
+
+    # Accumulate (output_path, jpeg_bytes) per clip.
+    all_buffers: list[tuple[Path, bytes]] = []
+    clips_ok = 0
+
+    for clip in sorted_clips:
+        clip_frames: list[tuple[Path, bytes]] = []
+        cap.set(cv2.CAP_PROP_POS_FRAMES, clip.start_frame - 1)
+
+        for frame_no in range(clip.start_frame, clip.end_frame + 1):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            lr = cv2.resize(frame, (_LR_WIDTH, _LR_HEIGHT), interpolation=cv2.INTER_CUBIC)
+            success, buf = cv2.imencode(".jpg", lr, encode_params)
+            if success:
+                out_path = clip.clip_dir / f"{frame_no:05d}.jpg"
+                clip_frames.append((out_path, buf.tobytes()))
+
+        if clip_frames:
+            all_buffers.extend(clip_frames)
+            clips_ok += 1
+
+    cap.release()
+
+    # Step 3: delete video (and any yt-dlp partial files) to free disk.
+    if not keep_video:
+        video_path.unlink(missing_ok=True)
+        for partial in cache_dir.glob(f"{video_id}.*"):
+            partial.unlink(missing_ok=True)
+
+    # Step 4: flush frames to disk (much smaller than the deleted video).
+    for path, jpeg_bytes in all_buffers:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(jpeg_bytes)
+
+    return video_id, clips_ok, len(clips) - clips_ok
+
+
+# ---------------------------------------------------------------------------
+# Orchestrate parallel video processing
+# ---------------------------------------------------------------------------
+
+
+def process_videos(
+    clips_by_video: dict[str, list[_ClipTask]],
+    cache_dir: Path,
+    yt_dlp: str,
+    *,
+    workers: int,
+    keep_videos: bool,
+) -> tuple[int, int]:
+    """Process all videos through the download→extract→delete→write pipeline.
+
+    Already-cached videos are submitted first so their disk space is reclaimed
+    before new downloads begin.
+
+    Returns ``(total_clips_ok, total_clips_fail)``.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cached: list[str] = []
+    to_download: list[str] = []
+    for vid in clips_by_video:
+        if (cache_dir / f"{vid}.mp4").exists():
+            cached.append(vid)
+        else:
+            to_download.append(vid)
+
+    total_videos = len(clips_by_video)
+    total_clips = sum(len(c) for c in clips_by_video.values())
+    print(
+        f"\n=== Processing {total_videos} videos ({total_clips} clips): "
+        f"{len(cached)} cached, {len(to_download)} to download, "
+        f"{workers} workers ==="
+    )
+
+    # Process cached videos first to free disk space before downloading more.
+    all_video_ids = cached + to_download
+
+    total_ok = 0
+    total_fail = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _process_one_video,
+                vid,
+                clips_by_video[vid],
+                cache_dir,
+                yt_dlp,
+                keep_videos,
+            ): vid
+            for vid in all_video_ids
+        }
+
+        for i, future in enumerate(as_completed(futures), 1):
+            vid = futures[future]
+            try:
+                _, ok, fail = future.result()
+                total_ok += ok
+                total_fail += fail
+            except Exception as exc:
+                n_clips = len(clips_by_video[vid])
+                total_fail += n_clips
+                print(f"    [FAIL] {vid}: {exc}")
+
+            if i % 20 == 0 or i == total_videos:
+                print(f"  [{i}/{total_videos}] videos processed ...")
+
+    return total_ok, total_fail
 
 
 # ---------------------------------------------------------------------------
@@ -402,9 +529,15 @@ def parse_args() -> argparse.Namespace:
         help="Which split to download (default: both)",
     )
     p.add_argument(
+        "--workers",
+        type=int,
+        default=3,
+        help="Number of parallel video-processing threads (default: 3)",
+    )
+    p.add_argument(
         "--keep-videos",
         action="store_true",
-        help="Keep downloaded YouTube videos in .video_cache/ (default: delete after extraction)",
+        help="Keep downloaded YouTube videos after extraction (default: delete to save disk)",
     )
     return p.parse_args()
 
@@ -420,25 +553,46 @@ def main() -> int:
     # Step 2: Select clips.
     selected = select_clips(clips_csv, max_clips=args.max_clips, split=args.split)
 
-    # Step 3: Download and extract frames.
-    ok, fail = download_clips(selected, out_dir, yt_dlp)
+    # Step 3: Group by video, filtering out already-extracted clips.
+    clips_by_video = _group_clips_by_video(selected, out_dir)
 
-    # Step 4: Download mugshot gallery images.
+    if not clips_by_video:
+        print("\nAll clips already extracted — nothing to do.")
+    else:
+        # Step 4: Process videos (download → extract to RAM → delete → write).
+        cache_dir = out_dir / ".video_cache"
+        ok, fail = process_videos(
+            clips_by_video,
+            cache_dir,
+            yt_dlp,
+            workers=args.workers,
+            keep_videos=args.keep_videos,
+        )
+        print(f"\nClips: {ok} succeeded, {fail} failed")
+
+    # Step 5: Download mugshot gallery images.
     identities = {r["Name"].strip() for r in selected}
     download_mugshots(mugshots_csv, out_dir, identities)
 
-    # Step 5: Clean up video cache unless --keep-videos.
+    # Step 6: Clean up any remaining cache files (partials from failed runs).
     cache_dir = out_dir / ".video_cache"
     if cache_dir.exists() and not args.keep_videos:
-        size_mb = sum(f.stat().st_size for f in cache_dir.iterdir() if f.is_file()) / 1024 / 1024
-        print(f"\nCleaning up video cache ({size_mb:.0f} MB) ...")
-        shutil.rmtree(cache_dir)
+        remaining = list(cache_dir.iterdir())
+        if remaining:
+            size_mb = sum(f.stat().st_size for f in remaining if f.is_file()) / 1024 / 1024
+            print(f"\nCleaning up {len(remaining)} leftover cache files ({size_mb:.0f} MB) ...")
+            shutil.rmtree(cache_dir)
+        else:
+            cache_dir.rmdir()
 
     # Summary.
-    n_frames_dirs = list((out_dir / "frames").rglob("*.png"))
+    frames_dir = out_dir / "frames"
+    n_frames = 0
+    if frames_dir.exists():
+        n_frames = len(list(frames_dir.rglob("*.jpg")))
+        n_frames += len(list(frames_dir.rglob("*.png")))
     print("\n=== Done ===")
-    print(f"Clips: {ok} succeeded, {fail} failed")
-    print(f"Frames: {len(n_frames_dirs)} PNG files")
+    print(f"Frames: {n_frames} image files")
     print(f"Identities: {len(identities)}")
     print(f"Output: {out_dir}")
     print(f"\nAnnotations: {annotations_csv}")
