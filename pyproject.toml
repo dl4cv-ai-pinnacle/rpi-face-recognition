@@ -17,6 +17,7 @@ dependencies = [
 insightface = ["insightface>=0.7.3"]
 skimage = ["scikit-image>=0.24.0"]
 quantize = ["onnxruntime>=1.19.0"]
+benchmark = ["yt-dlp>=2024.0"]
 
 [dependency-groups]
 dev = [
