@@ -135,7 +135,7 @@ WorkingDirectory=${REPO_ROOT}
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=${uv_bin} run --python 3.13 python -m server.app
-Restart=on-failure
+Restart=never
 RestartSec=3
 
 [Install]
