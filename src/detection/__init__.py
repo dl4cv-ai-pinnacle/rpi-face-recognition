@@ -23,6 +23,10 @@ def create_detector(config: DetectionConfig) -> DetectorLike:
             from src.detection.ultraface import UltraFaceDetector
 
             return UltraFaceDetector(config)
+        case "scrfd":
+            from src.detection.scrfd import SCRFDDetector
+
+            return SCRFDDetector(config)
         case _:
             msg = f"Unknown detection backend: {config.backend!r}"
             raise ValueError(msg)

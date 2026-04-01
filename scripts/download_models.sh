@@ -38,8 +38,32 @@ else
   echo "[OK] UltraFace downloaded"
 fi
 
+# -- SCRFD-2.5G (standalone, higher accuracy) --
+SCRFD_2_5G_PATH="${MODELS_DIR}/det_2.5g.onnx"
+if [[ -f "${SCRFD_2_5G_PATH}" ]]; then
+  echo "[OK] SCRFD-2.5G model already present"
+else
+  SCRFD_2_5G_URL="https://github.com/yakhyo/face-reidentification/releases/download/v0.0.1/det_2.5g.onnx"
+  echo "[DOWNLOAD] Fetching SCRFD-2.5G..."
+  curl -L "${SCRFD_2_5G_URL}" -o "${SCRFD_2_5G_PATH}"
+  echo "[OK] SCRFD-2.5G downloaded"
+fi
+
+# -- SCRFD-10G (standalone, highest accuracy) --
+SCRFD_10G_PATH="${MODELS_DIR}/det_10g.onnx"
+if [[ -f "${SCRFD_10G_PATH}" ]]; then
+  echo "[OK] SCRFD-10G model already present"
+else
+  SCRFD_10G_URL="https://github.com/yakhyo/face-reidentification/releases/download/v0.0.1/det_10g.onnx"
+  echo "[DOWNLOAD] Fetching SCRFD-10G..."
+  curl -L "${SCRFD_10G_URL}" -o "${SCRFD_10G_PATH}"
+  echo "[OK] SCRFD-10G downloaded"
+fi
+
 echo ""
 echo "=== Model files ==="
 ls -lh "${BUFFALO_DIR}"/*.onnx 2>/dev/null || true
 ls -lh "${ULTRAFACE_PATH}" 2>/dev/null || true
+ls -lh "${SCRFD_2_5G_PATH}" 2>/dev/null || true
+ls -lh "${SCRFD_10G_PATH}" 2>/dev/null || true
 echo "=== Done ==="

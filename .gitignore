@@ -212,3 +212,8 @@ __marimo__/
 # Project runtime artifacts
 models/
 data/
+
+# ONNX quantization temporaries
+sym_shape_infer_temp.onnx
+*.preproc.onnx
+*.data
