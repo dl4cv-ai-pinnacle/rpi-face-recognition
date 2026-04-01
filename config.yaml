@@ -20,6 +20,7 @@ matching:
   threshold: 0.4
 
 tracking:
+  method: "simple"                # "simple" | "kalman"
   iou_threshold: 0.3
   max_missed: 3
   smoothing: 0.65

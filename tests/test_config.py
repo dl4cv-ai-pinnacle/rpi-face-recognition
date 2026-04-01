@@ -46,3 +46,22 @@ def test_load_config_defaults_log_level(tmp_path: Path) -> None:
     """log_level defaults to INFO when omitted."""
     config = load_config("config.yaml")
     assert config.log_level == "INFO"
+
+
+def test_load_config_reads_tracking_method() -> None:
+    """Tracking method is parsed from config.yaml."""
+    config = load_config("config.yaml")
+    assert config.tracking.method == "simple"
+
+
+def test_load_config_defaults_tracking_method(tmp_path: Path) -> None:
+    """Tracking method defaults to 'simple' when omitted."""
+    config = load_config("config.yaml")
+    # Write a config without the method field to verify the default.
+    raw = yaml.safe_load(Path("config.yaml").read_text())
+    del raw["tracking"]["method"]
+    config_path = tmp_path / "no_method.yaml"
+    config_path.write_text(yaml.dump(raw))
+
+    config = load_config(config_path)
+    assert config.tracking.method == "simple"

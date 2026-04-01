@@ -21,7 +21,7 @@ from src.contracts import Float32Array, GalleryLike, PipelineLike, UInt8Array
 from src.gallery import EnrollmentResult, GalleryMatch, IdentityRecord, UnknownRecord
 from src.metrics import LiveMetricsCollector, get_memory_stats
 from src.quality import compute_face_quality
-from src.tracking import SimpleFaceTracker, Track, box_iou
+from src.tracking import Track, box_iou, create_tracker
 
 
 @dataclass(frozen=True)
@@ -90,7 +90,8 @@ class LiveRuntime:
         self.config = config
         self._pipeline_lock = threading.RLock()
         self._frame_counter = 0
-        self._tracker = SimpleFaceTracker(
+        self._tracker = create_tracker(
+            method=config.tracking.method,
             iou_threshold=config.tracking.iou_threshold,
             max_missed=config.tracking.max_missed,
             smoothing=config.tracking.smoothing,
@@ -382,18 +383,7 @@ class LiveRuntime:
         return ((self._frame_counter - 1) % interval) == 0
 
     def _build_held_tracks(self) -> list[Track]:
-        return [
-            Track(
-                track_id=t.track_id,
-                box=np.asarray(t.box, dtype=np.float32),
-                kps=None if t.kps is None else np.asarray(t.kps, dtype=np.float32),
-                age=t.age + 1,
-                hits=t.hits,
-                missed=t.missed,
-                matched=False,
-            )
-            for t in self._last_tracks
-        ]
+        return self._tracker.predict()
 
 
 def _crop_face_region(frame_bgr: UInt8Array, box: Float32Array) -> UInt8Array | None:
