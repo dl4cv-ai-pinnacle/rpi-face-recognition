@@ -204,6 +204,16 @@ slop/                   Archived individual prototypes (read-only)
 
 See `docs/ARCHITECTURE.md` for full details. See `docs/ATTRIBUTIONS.md` for component origins.
 
+## References
+
+Video benchmarks use the [FANVID](https://huggingface.co/datasets/kv1388/FANVID-Face_and_License_Plate_Recognition_in_Low-Resolution_Videos) dataset:
+
+> K. Vora, A. Savakis.
+> *FANVID: A Benchmark for Face and License Plate Recognition in Low-Resolution Videos.*
+> arXiv:2506.07304, 2025.
+
+Setup: `uv run --python 3.13 python scripts/download_fanvid.py --max-clips 500`
+
 ## Team
 
 - **Valenia** — gallery, live runtime, tracking, quality, metrics, benchmarks, tests, enrollment wizard

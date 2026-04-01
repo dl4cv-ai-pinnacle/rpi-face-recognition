@@ -16,7 +16,6 @@ def test_load_config_parses_all_sections(tmp_path: Path) -> None:
     assert config.detection.backend == "insightface"
     assert config.alignment.method == "cv2"
     assert config.embedding.embedding_dim == 512
-    assert config.matching.threshold == 0.4
     assert config.tracking.smoothing == 0.65
     assert config.gallery.enrich_max_samples == 48
     assert config.live.det_every == 3

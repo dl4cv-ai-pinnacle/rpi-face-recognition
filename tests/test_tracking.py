@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import numpy.typing as npt
 from src.tracking import KalmanFaceTracker, SimpleFaceTracker, box_iou, create_tracker
 
 
-def _box(x1: float, y1: float, x2: float, y2: float, conf: float = 0.9) -> np.ndarray:
+def _box(x1: float, y1: float, x2: float, y2: float, conf: float = 0.9) -> npt.NDArray[np.float32]:
     return np.array([x1, y1, x2, y2, conf], dtype=np.float32)
 
 
